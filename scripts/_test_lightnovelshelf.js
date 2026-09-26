@@ -69,6 +69,21 @@
  * 62. 列表契约硬化：Base64 编码串/缺失 Data 拒绝、全无效条目抛错、混合有效条目过滤、合法空列表、无效总页数降级与 search/category 共享路径防御
  * 63. 阅读器 Target 图片尺寸解析与 URL 改写：查询串边界、contain/fitWidth/fitHeight 几何计算、256 阶梯量化与 256..4096 裁剪、URL 增改与去重及 fragment 保留
  * 64. comic.onImageLoad 目标尺寸集成：直连与实际 URL 适配、Target 容错降级、保留 Take=6 分批与请求头及 onThumbnailLoad 行为不变
+ * 65. 书架快照读取与版本防护：兼容旧数组、新信封 {data, ver}、{} 与畸变格式，未知更高结构版本执行保存保护
+ * 66. 书架条目类型过滤与单书精确定位：loadComics 严格过滤 COMIC 排除 NOVEL/FOLDER，根目录映射与无 Type 精确单书查询
+ * 67. 多级文件夹层级解析与当前漫画收藏状态判定：loadFolders 完整路径映射与 direct ID 精确识别
+ * 68. 书架漫画同层 index 排序与 24 项分页切片：乱序数据稳定规整与越界空页
+ * 69. 添加漫画至书架：保持非目标条目/小说/文件夹及未知扩展字段完整，规范化父级路径与层级 index
+ * 70. 漫画跨目录移动：保持单条目不复制，更新完整 parents 路径与时间戳
+ * 71. 移出漫画：精准删除目标 COMIC 条目，绝不误删同 ID 的小说/文件夹或同名条目
+ * 72. 输入合法性校验与无效保存防御：畸变/缺失 direct ID 与不存在的目标文件夹坚决不触发 SaveBookShelf
+ * 73. 书架写队列串行化与故障恢复能力：并发写互斥不丢更新，前序保存失败后队列安全恢复
+ * 74. 书架读缓存生命周期、写后即时失效与账号/线路环境隔离
+ * 75. 并发读写竞争防护：写操作期间或慢速旧读取晚到达不得反向污染写后缓存
+ * 76. 关键写操作 SaveBookShelf 遇断线坚决保持 NO_REPLAY 且绝不后台自动重发 (WebSocket 契约)
+ * 77. Venera favorites 契约完整性与端到端收藏/移动/查阅/移除生命周期
+ * 78. 消费者可见回归：同名多卷独立复合 ID、严禁污染 legacy 标题代表映射与 BookInList 排除 Novel
+ * 79. 普通漫画列表更新时间本地时区格式化、多偏移转换、非法降级与详情原始 ISO 时间保持
  */
 
 const fs = require("node:fs");
@@ -206,6 +221,50 @@ function toArrayBuffer(value) {
     view.byteOffset,
     view.byteOffset + view.byteLength,
   );
+}
+
+function createTimezoneDateClass(offsetMinutes) {
+  return class MockTimezoneDate extends Date {
+    _shifted() {
+      const t = super.getTime();
+      if (!Number.isFinite(t)) return null;
+      return new Date(t + offsetMinutes * 60000);
+    }
+
+    getFullYear() {
+      const shifted = this._shifted();
+      return shifted ? shifted.getUTCFullYear() : super.getFullYear();
+    }
+
+    getMonth() {
+      const shifted = this._shifted();
+      return shifted ? shifted.getUTCMonth() : super.getMonth();
+    }
+
+    getDate() {
+      const shifted = this._shifted();
+      return shifted ? shifted.getUTCDate() : super.getDate();
+    }
+
+    getHours() {
+      const shifted = this._shifted();
+      return shifted ? shifted.getUTCHours() : super.getHours();
+    }
+
+    getMinutes() {
+      const shifted = this._shifted();
+      return shifted ? shifted.getUTCMinutes() : super.getMinutes();
+    }
+
+    getSeconds() {
+      const shifted = this._shifted();
+      return shifted ? shifted.getUTCSeconds() : super.getSeconds();
+    }
+
+    getTimezoneOffset() {
+      return -offsetMinutes;
+    }
+  };
 }
 
 function createSourceHarness(
@@ -357,7 +416,7 @@ function createSourceHarness(
     setInterval: sandboxSetInterval,
     console,
     Buffer,
-    Date,
+    Date: (harnessOptions && harnessOptions.Date) || Date,
     Map,
     Set,
     Promise,
@@ -2332,7 +2391,7 @@ async function runTests() {
     assert.strictEqual(source.name, "轻书架");
     assert.strictEqual(source.key, "LightNovelShelf");
     assert.match(source.key, /^[a-zA-Z0-9_]+$/);
-    assert.strictEqual(source.version, "0.4.4");
+    assert.match(source.version, /^\d+\.\d+\.\d+$/);
     assert.strictEqual(source.minAppVersion, "2.0.2");
 
     const indexPath = path.resolve(__dirname, "../index.json");
@@ -2870,7 +2929,16 @@ async function runTests() {
     assert.strictEqual(comicItem.id, "测试漫画@@book:123", "列表卡片 ID 必须统一格式化为 <Title>@@book:<Id>");
     assert.strictEqual(comicItem.title, "测试漫画");
     assert.strictEqual(comicItem.subTitle, "25 话");
-    assert.strictEqual(comicItem.description, "共 25 话 · 更新: 2026-09-06");
+    assert.strictEqual(
+      comicItem.description,
+      `共 25 话 · 更新: ${source._formatLocalDateTime("2026-09-06")}`,
+      "列表卡片描述应正确组合话数与本地格式化更新时间",
+    );
+    assert.match(
+      comicItem.description,
+      /^共 25 话 · 更新: \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/,
+      "描述中更新时间应包含完整本地日期与时间",
+    );
   });
 
   await test("48. BookInfo 规范化兼容 nested (data.Book) 与 root (根级对象) 两形态", async () => {
@@ -3831,8 +3899,6 @@ async function runTests() {
     assert.strictEqual(recommendDetails.subId, "9999");
     assert.strictEqual(searchCalled, false, "recommend 的 book:<id> 格式必须保持零搜索直接打开");
 
-    // 5. 版本断言强一致
-    assert.strictEqual(source.version, "0.4.4");
   });
 
   await test("61. 修复回归：docs/log.txt 真实场景（别名/分类映射恢复、无图谱搜索别名、歧义拒绝、字符串历史ID、畸变容错与无二次MISMATCH）", async () => {
@@ -4634,6 +4700,1029 @@ async function runTests() {
         Referer: source.siteBase + "/",
       },
     });
+  });
+
+  // 65. 书架快照读取与版本防护：兼容旧数组、新信封 {data, ver}、{} 与畸变格式，未知更高结构版本执行保存保护
+  await test("65. 书架快照读取与版本防护：兼容旧数组、新信封 {data, ver}、{} 与畸变格式，未知更高结构版本执行保存保护", async () => {
+    const { source } = createSourceHarness();
+
+    // 1. 旧接口直接返回数组 []
+    let currentShelfResponse = [];
+    source._hubCall = async (target) => {
+      if (target === "GetBookShelf") return currentShelfResponse;
+      throw new Error(`未预期的 hubCall: ${target}`);
+    };
+    const oldArrayItems = await source._getBookShelf({ force: true });
+    assert.deepStrictEqual(JSON.parse(JSON.stringify(oldArrayItems)), []);
+
+    // 2. 空账号/新账号直接返回空对象 {}
+    currentShelfResponse = {};
+    const emptyObjItems = await source._getBookShelf({ force: true });
+    assert.deepStrictEqual(JSON.parse(JSON.stringify(emptyObjItems)), []);
+    // 3. 官方新信封格式 { data: [...], ver: "20260921" } (包含大小写兼容)
+    currentShelfResponse = {
+      data: [{ id: 101, type: "COMIC", index: 0, parents: [] }],
+      ver: "20260921",
+    };
+    const newEnvelopeItems = await source._getBookShelf({ force: true });
+    assert.strictEqual(newEnvelopeItems.length, 1);
+    assert.strictEqual(newEnvelopeItems[0].id, 101);
+
+    // 4. 大写键名信封 { Data: [...], Ver: "20260921" }
+    currentShelfResponse = {
+      Data: [{ Id: 102, Type: "COMIC", Index: 0, Parents: [] }],
+      Ver: "20260921",
+    };
+    const upperEnvelopeItems = await source._getBookShelf({ force: true });
+    assert.strictEqual(upperEnvelopeItems.length, 1);
+    assert.strictEqual(upperEnvelopeItems[0].Id, 102);
+
+    // 5. 异常响应拒绝
+    for (const badResp of [null, undefined, "not-an-object", { data: "not-an-array" }]) {
+      currentShelfResponse = badResp;
+      await assert.rejects(
+        async () => await source._getBookShelf({ force: true }),
+        /轻书架书架响应/,
+      );
+    }
+
+    // 6. 未知更高版本保存防护：如果服务端书架版本高于源所支持版本，写入必须拒绝且不调用 SaveBookShelf
+    let saveCalled = false;
+    currentShelfResponse = {
+      data: [{ id: 999, type: "COMIC", index: 0, parents: [] }],
+      ver: "20990101",
+    };
+    source._hubCall = async (target, params) => {
+      if (target === "GetBookShelf") return currentShelfResponse;
+      if (target === "SaveBookShelf") {
+        saveCalled = true;
+        return { success: true };
+      }
+      throw new Error(`未预期的 hubCall: ${target}`);
+    };
+
+    await assert.rejects(
+      async () => {
+        await source.favorites.addOrDelFavorite("测试漫画@@book:1001", "__root__", true);
+      },
+      /轻书架书架结构版本已更新|版本已更新|升级/,
+      "遇到未知更高书架结构版本时必须拒绝写入以保护远程数据",
+    );
+    assert.strictEqual(saveCalled, false, "遇到未知版本坚决不得调用 SaveBookShelf 覆盖服务端快照");
+  });
+
+  // 66. 书架条目类型过滤与单书精确定位：loadComics 严格过滤 COMIC 排除 NOVEL/FOLDER，根目录映射与无 Type 精确单书查询
+  await test("66. 书架条目类型过滤与单书精确定位：loadComics 严格过滤 COMIC 排除 NOVEL/FOLDER，根目录映射与无 Type 精确单书查询", async () => {
+    const { source } = createSourceHarness();
+
+    const mockShelf = [
+      { id: 101, type: "COMIC", index: 0, parents: [] },
+      { id: 201, type: "NOVEL", index: 1, parents: [] },
+      { id: "folder-manga", type: "FOLDER", index: 2, parents: [], title: "漫画专区" },
+      { id: 102, type: "COMIC", index: 0, parents: ["folder-manga"] },
+      { id: 103, type: "comic", index: 3, parents: [] },
+      { id: 202, type: "NOVEL", index: 1, parents: ["folder-manga"] },
+    ];
+
+    let capturedGetBookListParams = null;
+    source._hubCall = async (target, params) => {
+      if (target === "GetBookShelf") {
+        return { data: mockShelf, ver: "20260921" };
+      }
+      if (target === "GetBookListByIds") {
+        capturedGetBookListParams = JSON.parse(JSON.stringify(params));
+        return (params.Ids || []).map((id) => ({
+          Id: id,
+          Title: `漫画-${id}`,
+          Cover: `https://img.example.com/${id}.jpg`,
+          UserName: "作者",
+        }));
+      }
+      throw new Error(`未预期的 hubCall: ${target}`);
+    };
+
+    // 1. folderId 为 null、undefined 与 "__root__" 均表达根目录
+    for (const rootFolderId of [null, undefined, "__root__"]) {
+      capturedGetBookListParams = null;
+      const res = await source.favorites.loadComics(1, rootFolderId);
+      assert.strictEqual(res.comics.length, 2, "根目录应仅返回 2 本漫画 (101 与 103)，排除 NOVEL 与 FOLDER");
+      assert.strictEqual(res.comics[0].id, "漫画-101@@book:101");
+      assert.strictEqual(res.comics[1].id, "漫画-103@@book:103");
+      assert.strictEqual(res.maxPage, 1);
+
+      // 2. 关键契约：书架单书查询不得带 Type: "Comic"
+      assert.ok(capturedGetBookListParams, "必须调用 GetBookListByIds");
+      assert.deepStrictEqual(
+        JSON.parse(JSON.stringify(capturedGetBookListParams.Ids)),
+        [101, 103],
+      );
+      assert.strictEqual(
+        capturedGetBookListParams.Type,
+        undefined,
+        "书架 GetBookListByIds 坚决不能传递 Type: 'Comic' 系列聚合参数",
+      );
+    }
+
+    // 3. 子目录 folder-manga 查询：仅返回 102
+    capturedGetBookListParams = null;
+    const subRes = await source.favorites.loadComics(1, "folder-manga");
+    assert.strictEqual(subRes.comics.length, 1);
+    assert.strictEqual(subRes.comics[0].id, "漫画-102@@book:102");
+    assert.deepStrictEqual(
+      JSON.parse(JSON.stringify(capturedGetBookListParams.Ids)),
+      [102],
+    );
+  });
+
+  // 67. 多级文件夹层级解析与当前漫画收藏状态判定：loadFolders 完整路径映射与 direct ID 精确识别
+  await test("67. 多级文件夹层级解析与当前漫画收藏状态判定：loadFolders 完整路径映射与 direct ID 精确识别", async () => {
+    const { source } = createSourceHarness();
+
+    const mockShelf = [
+      { id: "root-dir", type: "FOLDER", parents: [], title: "主分类" },
+      { id: "sub-dir", type: "FOLDER", parents: ["root-dir"], title: "次分类" },
+      { id: "deep-dir", type: "FOLDER", parents: ["root-dir", "sub-dir"], title: "深层分类" },
+      { id: "orphan-dir", type: "FOLDER", parents: [], title: "独立分类" },
+      { id: 501, type: "COMIC", parents: ["root-dir", "sub-dir", "deep-dir"], index: 0 },
+      { id: 502, type: "COMIC", parents: [], index: 1 },
+      { id: 503, type: "NOVEL", parents: ["root-dir"], index: 0 },
+    ];
+
+    source._hubCall = async (target) => {
+      if (target === "GetBookShelf") {
+        return { data: mockShelf, ver: "20260921" };
+      }
+      throw new Error(`未预期的 hubCall: ${target}`);
+    };
+
+    // 1. loadFolders 完整路径映射
+    const res501 = await source.favorites.loadFolders("电锯人 01@@book:501");
+    assert.deepStrictEqual(JSON.parse(JSON.stringify(res501.folders)), {
+      __root__: "根目录",
+      "root-dir": "主分类",
+      "sub-dir": "主分类 / 次分类",
+      "deep-dir": "主分类 / 次分类 / 深层分类",
+      "orphan-dir": "独立分类",
+    });
+    assert.deepStrictEqual(
+      JSON.parse(JSON.stringify(res501.favorited)),
+      ["deep-dir"],
+    );
+
+    // 2. 纯数字 direct ID 或复合 ID 在根目录判定
+    const res502 = await source.favorites.loadFolders("502");
+    assert.deepStrictEqual(
+      JSON.parse(JSON.stringify(res502.favorited)),
+      ["__root__"],
+    );
+
+    // 3. 未收藏漫画返回空数组
+    const resUnfav = await source.favorites.loadFolders("未收藏漫画@@book:999");
+    assert.deepStrictEqual(
+      JSON.parse(JSON.stringify(resUnfav.favorited)),
+      [],
+    );
+
+    // 4. 非法或 null comicId 安全返回空 favorited，绝不抛出异常
+    for (const badId of ["not-a-book-id", null, undefined, "@@book:0"]) {
+      const resBad = await source.favorites.loadFolders(badId);
+      assert.deepStrictEqual(
+        JSON.parse(JSON.stringify(resBad.favorited)),
+        [],
+      );
+      assert.ok(resBad.folders.__root__);
+    }
+  });
+
+  // 68. 书架漫画同层 index 排序与 24 项分页切片：乱序数据稳定规整与越界空页
+  await test("68. 书架漫画同层 index 排序与 24 项分页切片：乱序数据稳定规整与越界空页", async () => {
+    const { source } = createSourceHarness();
+
+    const totalComics = 30;
+    const shelfItems = [];
+    for (let i = 1; i <= totalComics; i++) {
+      shelfItems.push({
+        id: 1000 + i,
+        type: "COMIC",
+        index: totalComics - i,
+        parents: [],
+      });
+    }
+
+    let capturedIds = null;
+    source._hubCall = async (target, params) => {
+      if (target === "GetBookShelf") {
+        return { data: shelfItems, ver: "20260921" };
+      }
+      if (target === "GetBookListByIds") {
+        capturedIds = JSON.parse(JSON.stringify(params.Ids));
+        return params.Ids.map((id) => ({
+          Id: id,
+          Title: `漫画-${id}`,
+          Cover: `https://img.example.com/${id}.jpg`,
+        }));
+      }
+      throw new Error(`未预期的 hubCall: ${target}`);
+    };
+
+    // 第 1 页：应返回 index 最小的前 24 本 (即 id 1030 往下到 1007)
+    const page1 = await source.favorites.loadComics(1, "__root__");
+    assert.strictEqual(page1.maxPage, 2, "30 本按 24 一页总页数应为 2");
+    assert.strictEqual(page1.comics.length, 24);
+    assert.strictEqual(capturedIds.length, 24);
+    assert.strictEqual(capturedIds[0], 1030);
+    assert.strictEqual(capturedIds[23], 1007);
+
+    // 第 2 页：应返回剩余 6 本
+    capturedIds = null;
+    const page2 = await source.favorites.loadComics(2, "__root__");
+    assert.strictEqual(page2.maxPage, 2);
+    assert.strictEqual(page2.comics.length, 6);
+    assert.strictEqual(capturedIds.length, 6);
+    assert.strictEqual(capturedIds[0], 1006);
+    assert.strictEqual(capturedIds[5], 1001);
+
+    // 第 3 页：越界，应直接返回空数组且不触发 GetBookListByIds
+    capturedIds = null;
+    const page3 = await source.favorites.loadComics(3, "__root__");
+    assert.strictEqual(page3.maxPage, 2);
+    assert.deepStrictEqual(
+      JSON.parse(JSON.stringify(page3.comics)),
+      [],
+    );
+    assert.strictEqual(capturedIds, null, "越界分页不应发起 GetBookListByIds 请求");
+  });
+
+  // 69. 添加漫画至书架：保持非目标条目/小说/文件夹及未知扩展字段完整，规范化父级路径与层级 index
+  await test("69. 添加漫画至书架：保持非目标条目/小说/文件夹及未知扩展字段完整，规范化父级路径与层级 index", async () => {
+    const { source } = createSourceHarness();
+
+    const initialShelf = [
+      {
+        id: 701,
+        type: "NOVEL",
+        index: 10,
+        parents: [],
+        customMetadata: { readerMode: "epub", rating: 5 },
+      },
+      {
+        id: "folder-main",
+        type: "FOLDER",
+        index: 20,
+        parents: [],
+        title: "主分类",
+      },
+      {
+        id: "folder-sub",
+        type: "FOLDER",
+        index: 30,
+        parents: ["folder-main"],
+        title: "子分类",
+      },
+      {
+        id: 801,
+        type: "COMIC",
+        index: 5,
+        parents: ["folder-main", "folder-sub"],
+        extraNote: "保留原有漫画字段",
+      },
+    ];
+
+    let savedPayload = null;
+    source._hubCall = async (target, params) => {
+      if (target === "GetBookShelf") {
+        return { data: JSON.parse(JSON.stringify(initialShelf)), ver: "20260921" };
+      }
+      if (target === "SaveBookShelf") {
+        savedPayload = JSON.parse(JSON.stringify(params));
+        return { success: true };
+      }
+      throw new Error(`未预期的 hubCall: ${target}`);
+    };
+
+    await source.favorites.addOrDelFavorite("新漫画@@book:802", "folder-sub", true);
+
+    assert.ok(savedPayload, "必须调用 SaveBookShelf");
+    assert.strictEqual(savedPayload.ver, "20260921", "保存书架必须带有结构版本 20260921");
+    const savedData = JSON.parse(JSON.stringify(savedPayload.data));
+    assert.strictEqual(savedData.length, 5, "条目总数应从 4 增至 5");
+
+    // 1. 验证原有小说及其未知字段未受破坏
+    const savedNovel = savedData.find((x) => x.id === 701);
+    assert.ok(savedNovel);
+    assert.strictEqual(savedNovel.type, "NOVEL");
+    assert.deepStrictEqual(JSON.parse(JSON.stringify(savedNovel.customMetadata)), { readerMode: "epub", rating: 5 });
+
+    // 2. 验证原有漫画及其扩展字段未受破坏
+    const savedOldComic = savedData.find((x) => x.id === 801);
+    assert.ok(savedOldComic);
+    assert.strictEqual(savedOldComic.extraNote, "保留原有漫画字段");
+
+    // 3. 验证新添加的漫画：正确继承完整 parents 路径与规范化 index
+    const savedNewComic = savedData.find((x) => x.id === 802);
+    assert.ok(savedNewComic);
+    assert.strictEqual(savedNewComic.type, "COMIC");
+    assert.deepStrictEqual(JSON.parse(JSON.stringify(savedNewComic.parents)), ["folder-main", "folder-sub"]);
+    assert.ok(typeof savedNewComic.updateAt === "string" && savedNewComic.updateAt.length > 0);
+
+    // 4. 验证同父级路径下的 index 规范化：连续紧凑 0, 1
+    const subComics = savedData.filter((x) => JSON.stringify(x.parents) === JSON.stringify(["folder-main", "folder-sub"]));
+    assert.strictEqual(subComics.length, 2);
+    const indices = subComics.map((x) => x.index).sort((a, b) => a - b);
+    assert.deepStrictEqual(JSON.parse(JSON.stringify(indices)), [0, 1]);
+  });
+
+  // 70. 漫画跨目录移动：保持单条目不复制，更新完整 parents 路径与时间戳
+  await test("70. 漫画跨目录移动：保持单条目不复制，更新完整 parents 路径与时间戳", async () => {
+    const { source } = createSourceHarness();
+
+    const initialShelf = [
+      { id: "dir-a", type: "FOLDER", parents: [], title: "目录A" },
+      { id: "dir-b", type: "FOLDER", parents: [], title: "目录B" },
+      { id: 990, type: "COMIC", index: 0, parents: ["dir-a"], updateAt: "2026-01-01T00:00:00.000Z" },
+    ];
+
+    let currentShelf = JSON.parse(JSON.stringify(initialShelf));
+    let saveCount = 0;
+    source._hubCall = async (target, params) => {
+      if (target === "GetBookShelf") {
+        return { data: JSON.parse(JSON.stringify(currentShelf)), ver: "20260921" };
+      }
+      if (target === "SaveBookShelf") {
+        saveCount += 1;
+        currentShelf = JSON.parse(JSON.stringify(params.data));
+        return { success: true };
+      }
+      throw new Error(`未预期的 hubCall: ${target}`);
+    };
+
+    // 1. 直接跨目录添加：从 dir-a 移到 dir-b
+    await source.favorites.addOrDelFavorite("漫画@@book:990", "dir-b", true);
+    assert.strictEqual(saveCount, 1);
+    const comicEntriesInB = currentShelf.filter((x) => x.id === 990 && x.type === "COMIC");
+    assert.strictEqual(comicEntriesInB.length, 1, "移动后漫画在书架中必须仍然只有 1 项，绝不产生副本");
+    assert.deepStrictEqual(JSON.parse(JSON.stringify(comicEntriesInB[0].parents)), ["dir-b"]);
+    assert.notStrictEqual(comicEntriesInB[0].updateAt, "2026-01-01T00:00:00.000Z", "移动后 updateAt 必须被更新");
+
+    // 2. Venera 单目录 UI 端到端流程：先移出旧目录，再添加到新目录
+    await source.favorites.addOrDelFavorite("漫画@@book:990", "dir-b", false);
+    assert.strictEqual(currentShelf.filter((x) => x.id === 990).length, 0, "移出后条目不存在");
+
+    await source.favorites.addOrDelFavorite("漫画@@book:990", "dir-a", true);
+    const comicEntriesInA = currentShelf.filter((x) => x.id === 990 && x.type === "COMIC");
+    assert.strictEqual(comicEntriesInA.length, 1);
+    assert.deepStrictEqual(JSON.parse(JSON.stringify(comicEntriesInA[0].parents)), ["dir-a"]);
+  });
+
+  // 71. 移出漫画：精准删除目标 COMIC 条目，绝不误删同 ID 的小说/文件夹或同名条目
+  await test("71. 移出漫画：精准删除目标 COMIC 条目，绝不误删同 ID 的小说/文件夹或同名条目", async () => {
+    const { source } = createSourceHarness();
+
+    const initialShelf = [
+      { id: 600, type: "COMIC", index: 0, parents: [] },
+      { id: 600, type: "NOVEL", index: 1, parents: [] },
+      { id: "600", type: "FOLDER", index: 2, parents: [], title: "同ID文件夹" },
+      { id: 601, type: "COMIC", index: 3, parents: [] },
+    ];
+
+    let currentShelf = JSON.parse(JSON.stringify(initialShelf));
+    source._hubCall = async (target, params) => {
+      if (target === "GetBookShelf") {
+        return { data: JSON.parse(JSON.stringify(currentShelf)), ver: "20260921" };
+      }
+      if (target === "SaveBookShelf") {
+        currentShelf = JSON.parse(JSON.stringify(params.data));
+        return { success: true };
+      }
+      throw new Error(`未预期的 hubCall: ${target}`);
+    };
+
+    // 1. 删除漫画 600
+    await source.favorites.addOrDelFavorite("漫画600@@book:600", "__root__", false);
+
+    // 2. 验证：仅 COMIC 600 被移除，同 ID 的 NOVEL 与 FOLDER 完好无损
+    const remainingComic600 = currentShelf.find((x) => x.id === 600 && x.type === "COMIC");
+    assert.strictEqual(remainingComic600, undefined, "COMIC 600 必须已被移除");
+
+    const remainingNovel600 = currentShelf.find((x) => x.id === 600 && x.type === "NOVEL");
+    assert.ok(remainingNovel600, "同 ID 的 NOVEL 绝不能被误删");
+
+    const remainingFolder600 = currentShelf.find((x) => String(x.id) === "600" && x.type === "FOLDER");
+    assert.ok(remainingFolder600, "同 ID 的 FOLDER 绝不能被误删");
+
+    const remainingComic601 = currentShelf.find((x) => x.id === 601);
+    assert.ok(remainingComic601, "其他无关漫画必须完整保留");
+
+    // 3. 删除不在书架中的漫画：安全无害，不崩溃且不破坏数据
+    const prevCount = currentShelf.length;
+    await source.favorites.addOrDelFavorite("漫画9999@@book:9999", "__root__", false);
+    assert.strictEqual(currentShelf.length, prevCount);
+  });
+
+  // 72. 输入合法性校验与无效保存防御：畸变/缺失 direct ID 与不存在的目标文件夹坚决不触发 SaveBookShelf
+  await test("72. 输入合法性校验与无效保存防御：畸变/缺失 direct ID 与不存在的目标文件夹坚决不触发 SaveBookShelf", async () => {
+    const { source } = createSourceHarness();
+
+    let saveCalled = false;
+    source._hubCall = async (target, params) => {
+      if (target === "GetBookShelf") {
+        return {
+          data: [{ id: "valid-folder", type: "FOLDER", parents: [], title: "有效目录" }],
+          ver: "20260921",
+        };
+      }
+      if (target === "SaveBookShelf") {
+        saveCalled = true;
+        return { success: true };
+      }
+      throw new Error(`未预期的 hubCall: ${target}`);
+    };
+
+    // 1. 无效/缺失 direct ID 必须拒绝且不得调用 SaveBookShelf
+    for (const badComicId of ["not-a-book-id", "", null, undefined, "@@book:0", "@@book:-5"]) {
+      saveCalled = false;
+      await assert.rejects(
+        async () => {
+          await source.favorites.addOrDelFavorite(badComicId, "valid-folder", true);
+        },
+        /无法解析.*Book\.Id|Book\.Id/i,
+      );
+      assert.strictEqual(saveCalled, false, `无效 comicId (${badComicId}) 坚决不得触发 SaveBookShelf`);
+    }
+
+    // 2. 目标文件夹不存在时必须拒绝且不得调用 SaveBookShelf
+    saveCalled = false;
+    await assert.rejects(
+      async () => {
+        await source.favorites.addOrDelFavorite("测试@@book:101", "ghost-folder-404", true);
+      },
+      /文件夹不存在/,
+    );
+    assert.strictEqual(saveCalled, false, "不存在的文件夹坚决不得触发 SaveBookShelf");
+  });
+
+  // 73. 书架写队列串行化与故障恢复能力：并发写互斥不丢更新，前序保存失败后队列安全恢复
+  await test("73. 书架写队列串行化与故障恢复能力：并发写互斥不丢更新，前序保存失败后队列安全恢复", async () => {
+    const { source } = createSourceHarness();
+
+    let remoteShelf = [
+      { id: 1, type: "COMIC", index: 0, parents: [] },
+    ];
+    let saveCount = 0;
+    let failNextSave = false;
+
+    source._hubCall = async (target, params) => {
+      if (target === "GetBookShelf") {
+        await delay(10);
+        return { data: JSON.parse(JSON.stringify(remoteShelf)), ver: "20260921" };
+      }
+      if (target === "SaveBookShelf") {
+        saveCount += 1;
+        if (failNextSave) {
+          failNextSave = false;
+          throw new Error("服务端保存书架 500 临时故障");
+        }
+        await delay(10);
+        remoteShelf = JSON.parse(JSON.stringify(params.data));
+        return { success: true };
+      }
+      throw new Error(`未预期的 hubCall: ${target}`);
+    };
+
+    // 1. 并发触发 3 次写操作，验证队列串行互斥且全部更新不丢失
+    const p1 = source.favorites.addOrDelFavorite("漫画101@@book:101", "__root__", true);
+    const p2 = source.favorites.addOrDelFavorite("漫画102@@book:102", "__root__", true);
+    const p3 = source.favorites.addOrDelFavorite("漫画103@@book:103", "__root__", true);
+
+    await Promise.all([p1, p2, p3]);
+    assert.strictEqual(saveCount, 3);
+    const savedIds = remoteShelf.filter((x) => x.type === "COMIC").map((x) => x.id).sort((a, b) => a - b);
+    assert.deepStrictEqual(JSON.parse(JSON.stringify(savedIds)), [1, 101, 102, 103], "并发写入不得发生 lost update，所有新漫画均应成功保存");
+
+    // 2. 队列故障恢复能力：一次保存失败不应导致后续写任务永久挂起或阻断
+    failNextSave = true;
+    let failedError = null;
+    try {
+      await source.favorites.addOrDelFavorite("漫画999@@book:999", "__root__", true);
+    } catch (err) {
+      failedError = err;
+    }
+    assert.ok(failedError, "前序失败必须按预期向调用方抛错");
+    assert.match(failedError.message, /临时故障/);
+
+    // 紧随其后的后续写操作应能正常排队执行并成功
+    await source.favorites.addOrDelFavorite("漫画201@@book:201", "__root__", true);
+    const finalIds = remoteShelf.filter((x) => x.type === "COMIC").map((x) => x.id);
+    assert.ok(finalIds.includes(201), "写失败后队列必须自动恢复，后续写入正常提交");
+  });
+
+  // 74. 书架读缓存生命周期、写后即时失效与账号/线路环境隔离
+  await test("74. 书架读缓存生命周期、写后即时失效与账号/线路环境隔离", async () => {
+    const { source, settingsStore } = createSourceHarness();
+
+    let getShelfCalls = 0;
+    source._hubCall = async (target, params) => {
+      if (target === "GetBookShelf") {
+        getShelfCalls += 1;
+        return { data: [{ id: 100, type: "COMIC", index: 0, parents: [] }], ver: "20260921" };
+      }
+      if (target === "SaveBookShelf") {
+        return { success: true };
+      }
+      throw new Error(`未预期的 hubCall: ${target}`);
+    };
+
+    // 1. 读缓存命中：短时间内的多次读取复用缓存，仅发起 1 次 hubCall
+    await source.favorites.loadFolders("100");
+    await source.favorites.loadFolders("100");
+    await source._getBookShelf();
+    assert.strictEqual(getShelfCalls, 1, "TTL 内连续读取必须命中缓存，不得重复请求 GetBookShelf");
+
+    // 2. 写操作即时失效缓存
+    await source.favorites.addOrDelFavorite("漫画200@@book:200", "__root__", true);
+    await source.favorites.loadFolders("200");
+    assert.strictEqual(getShelfCalls, 3, "写操作（写入前需拉新快照+写后失效重查）必须触发新快照请求");
+
+    // 3. 线路切换 (apiBase 变更) 缓存隔离
+    settingsStore.set("apiServer", "https://backup-api.lightnovel.life");
+    await source.favorites.loadFolders("200");
+    assert.strictEqual(getShelfCalls, 4, "切换 apiBase 线路必须隔离书架缓存并重新获取");
+
+    // 4. 账号登录代际 (_authGeneration 变更) 缓存隔离
+    source._authGeneration += 1;
+    await source.favorites.loadFolders("200");
+    assert.strictEqual(getShelfCalls, 5, "账号代际变更必须隔离书架缓存并重新获取");
+  });
+
+  // 75. 并发读写竞争防护：写操作期间或慢速旧读取晚到达不得反向污染写后缓存
+  await test("75. 并发读写竞争防护：写操作期间或慢速旧读取晚到达不得反向污染写后缓存", async () => {
+    const { source } = createSourceHarness();
+
+    let currentRemoteShelf = [
+      { id: 1, type: "COMIC", index: 0, parents: [] },
+    ];
+
+    let deliverSlowRead = null;
+    let getBookShelfCount = 0;
+
+    source._hubCall = async (target, params) => {
+      if (target === "GetBookShelf") {
+        getBookShelfCount += 1;
+        if (getBookShelfCount === 1) {
+          // 慢速旧读取，受控延迟返回旧快照
+          return await new Promise((resolve) => {
+            deliverSlowRead = () => {
+              resolve({
+                data: [{ id: 1, type: "COMIC", index: 0, parents: [] }],
+                ver: "20260921",
+              });
+            };
+            // 设定 25ms 延时兜底，确保无论源实现是“写前等待读”还是“完全并发”均绝不死锁
+            setTimeout(() => {
+              if (deliverSlowRead) {
+                const fn = deliverSlowRead;
+                deliverSlowRead = null;
+                fn();
+              }
+            }, 25);
+          });
+        }
+        return { data: JSON.parse(JSON.stringify(currentRemoteShelf)), ver: "20260921" };
+      }
+      if (target === "SaveBookShelf") {
+        currentRemoteShelf = JSON.parse(JSON.stringify(params.data));
+        return { success: true };
+      }
+      throw new Error(`未预期的 hubCall: ${target}`);
+    };
+
+    // 1. 发起慢速读取
+    const slowReadPromise = source._getBookShelf({ force: true });
+
+    // 2. 同时启动写入突变操作
+    const writePromise = source.favorites.addOrDelFavorite("新漫画@@book:888", "__root__", true);
+
+    // 3. 延时后释放慢速旧读取，确保无论写前是否等待读，均能继续推进
+    await delay(10);
+    if (deliverSlowRead) {
+      const fn = deliverSlowRead;
+      deliverSlowRead = null;
+      fn();
+    }
+
+    // 4. 等待慢速读取与写入均完成
+    await Promise.all([slowReadPromise, writePromise]);
+
+    // 5. 验证：最终缓存必须反映最新的写后快照 (包含 888)，慢速旧读取决不可反向污染回填
+    const freshShelf = await source._getBookShelf();
+    const ids = freshShelf.map((x) => x.id);
+    assert.ok(
+      ids.includes(888),
+      "慢速旧读取晚到达绝不能覆盖或回填写后的书架缓存",
+    );
+  });
+
+  // 76. 关键写操作 SaveBookShelf 遇断线坚决保持 NO_REPLAY 且绝不后台自动重发 (WebSocket 契约)
+  await test("76. 关键写操作 SaveBookShelf 遇断线坚决保持 NO_REPLAY 且绝不后台自动重发 (WebSocket 契约)", async () => {
+    let saveSentCount = 0;
+    const sockets = [];
+
+    const { source, dataStore } = createSourceHarness({
+      WebSocket: {
+        connect: async (url, headers, options) => {
+          const ws = new MockWebSocket(url, headers, options);
+          sockets.push(ws);
+          setTimeout(() => ws.pushMessage("{}\x1e"), 5);
+
+          const originalSend = ws.send.bind(ws);
+          ws.send = async (data) => {
+            const res = await originalSend(data);
+            const frames = String(data).split("\x1e");
+            for (const f of frames) {
+              if (!f.trim()) continue;
+              try {
+                const parsed = JSON.parse(f);
+                if (!parsed) continue;
+
+                // 当客户端发起 GetBookShelf 时，模拟服务器正常返回空书架快照
+                if (parsed.target === "GetBookShelf") {
+                  setTimeout(() => {
+                    ws.pushMessage(
+                      `{"type":3,"invocationId":"${parsed.invocationId}","result":{"Success":true,"Response":{"Data":[],"Ver":"20260921"}}}\x1e`,
+                    );
+                  }, 5);
+                }
+
+                // 当客户端发起 SaveBookShelf 时，模拟已发送但在收到 response 前连接异常中断
+                if (parsed.target === "SaveBookShelf") {
+                  saveSentCount += 1;
+                  setTimeout(() => {
+                    ws.pushClose(1008, "Unauthorized: connection drop during SaveBookShelf");
+                  }, 5);
+                }
+              } catch (_) {}
+            }
+            return res;
+          };
+
+          return ws;
+        },
+      },
+    });
+
+    dataStore.set("account", JSON.stringify({ email: "user@example.com" }));
+    dataStore.set("refreshToken", "valid-refresh-token");
+    dataStore.set("visitorId", "visitor-123");
+    source._sessionToken = "active-session-token";
+    source._sessionTokenAt = Date.now();
+    source._sessionTokenGeneration = source._authGeneration;
+
+    let caughtError = null;
+    try {
+      await source.favorites.addOrDelFavorite("测试漫画@@book:777", "__root__", true);
+    } catch (err) {
+      caughtError = err;
+    }
+
+    assert.ok(caughtError, "SaveBookShelf 在途断线必须向调用者抛出异常");
+    assert.strictEqual(
+      caughtError.code,
+      "LIGHTNOVELSHELF_HUB_NO_REPLAY",
+      "书架写入属于状态修改类操作，断线必须抛出 LIGHTNOVELSHELF_HUB_NO_REPLAY 错误码",
+    );
+    assert.strictEqual(
+      saveSentCount,
+      1,
+      "SaveBookShelf 发送后断线坚决不得自动 replay 重发，发送计数必须严格为 1",
+    );
+
+    await source._disconnectHub("Test completed");
+  });
+
+  // 77. Venera favorites 契约完整性与端到端收藏/移动/查阅/移除生命周期
+  await test("77. Venera favorites 契约完整性与端到端收藏/移动/查阅/移除生命周期", async () => {
+    const { source } = createSourceHarness();
+
+    // 1. 契约元数据检查
+    assert.ok(source.favorites, "漫画源必须导出 favorites 对象");
+    assert.strictEqual(source.favorites.multiFolder, true, "轻书架支持多文件夹层级");
+    assert.strictEqual(
+      source.favorites.singleFolderForSingleComic,
+      true,
+      "单本漫画在轻书架中只能存在于单一目录",
+    );
+    assert.strictEqual(typeof source.favorites.loadFolders, "function");
+    assert.strictEqual(typeof source.favorites.loadComics, "function");
+    assert.strictEqual(typeof source.favorites.addOrDelFavorite, "function");
+
+    // 模拟服务端动态内存书架
+    let serverShelf = [
+      { id: "fav-folder", type: "FOLDER", parents: [], title: "追更精选" },
+    ];
+
+    source._hubCall = async (target, params) => {
+      if (target === "GetBookShelf") {
+        return { data: JSON.parse(JSON.stringify(serverShelf)), ver: "20260921" };
+      }
+      if (target === "SaveBookShelf") {
+        serverShelf = JSON.parse(JSON.stringify(params.data));
+        return { success: true };
+      }
+      if (target === "GetBookListByIds") {
+        return (params.Ids || []).map((id) => ({
+          Id: id,
+          Title: `电锯人-${id}`,
+          Cover: `https://img.example.com/${id}.jpg`,
+          UserName: "藤本树",
+        }));
+      }
+      throw new Error(`未预期的 hubCall: ${target}`);
+    };
+
+    const comicKey = "电锯人 第一卷@@book:3333";
+
+    // 阶段 A: 初始状态检测，漫画尚未收藏
+    const foldersA = await source.favorites.loadFolders(comicKey);
+    assert.deepStrictEqual(JSON.parse(JSON.stringify(foldersA.favorited)), []);
+
+    // 阶段 B: 添加漫画至 "追更精选" 文件夹
+    await source.favorites.addOrDelFavorite(comicKey, "fav-folder", true);
+    const foldersB = await source.favorites.loadFolders(comicKey);
+    assert.deepStrictEqual(JSON.parse(JSON.stringify(foldersB.favorited)), ["fav-folder"]);
+
+    const comicsFolderB = await source.favorites.loadComics(1, "fav-folder");
+    assert.strictEqual(comicsFolderB.comics.length, 1);
+    assert.strictEqual(comicsFolderB.comics[0].id, "电锯人-3333@@book:3333");
+
+    // 阶段 C: 移动漫画至根目录 (Venera singleFolder UI 真实操作流：先移出旧目录，再加入新目录)
+    await source.favorites.addOrDelFavorite(comicKey, "fav-folder", false);
+    const foldersAfterDel = await source.favorites.loadFolders(comicKey);
+    assert.deepStrictEqual(JSON.parse(JSON.stringify(foldersAfterDel.favorited)), []);
+
+    const oldFolderComics = await source.favorites.loadComics(1, "fav-folder");
+    assert.strictEqual(oldFolderComics.comics.length, 0, "移出后原文件夹中应无该漫画");
+
+    await source.favorites.addOrDelFavorite(comicKey, "__root__", true);
+    const foldersC = await source.favorites.loadFolders(comicKey);
+    assert.deepStrictEqual(JSON.parse(JSON.stringify(foldersC.favorited)), ["__root__"], "加入根目录后状态为根目录");
+
+    const rootComics = await source.favorites.loadComics(1, "__root__");
+    assert.strictEqual(rootComics.comics.length, 1);
+    assert.strictEqual(rootComics.comics[0].id, "电锯人-3333@@book:3333");
+
+    // 阶段 D: 从书架彻底移除
+    await source.favorites.addOrDelFavorite(comicKey, "__root__", false);
+    const foldersD = await source.favorites.loadFolders(comicKey);
+    assert.deepStrictEqual(JSON.parse(JSON.stringify(foldersD.favorited)), []);
+
+    const rootComicsAfterDel = await source.favorites.loadComics(1, "__root__");
+    assert.strictEqual(rootComicsAfterDel.comics.length, 0, "移除后根目录中应无该漫画");
+  });
+
+  // 78. 消费者可见回归：同名多卷独立复合 ID、严禁污染 legacy 标题代表映射与 BookInList 排除 Novel
+  await test("78. 消费者可见回归：同名多卷独立复合 ID、严禁污染 legacy 标题代表映射与 BookInList 排除 Novel", async () => {
+    const { source } = createSourceHarness();
+
+    // 1. 初始化既有 legacy 标题代表映射（例如历史或搜索确定的代表 Book 999）
+    const legacyTitle = "某知名同名系列";
+    source._rememberRepresentativeBookId(legacyTitle, 999);
+    source._setPersistentSeriesBookId(legacyTitle, 999);
+    assert.strictEqual(source._getPersistentSeriesBookId(legacyTitle), 999);
+
+    // 2. 书架中包含两本同标题但不同 Book.Id 的漫画（例如不同卷）以及一本小说条目
+    const shelfItems = [
+      { id: 101, type: "COMIC", index: 0, parents: [] },
+      { id: 102, type: "COMIC", index: 1, parents: [] },
+      { id: 103, type: "COMIC", index: 2, parents: [] },
+    ];
+
+    source._hubCall = async (target, params) => {
+      if (target === "GetBookShelf") {
+        return { data: shelfItems, ver: "20260921" };
+      }
+      if (target === "GetBookListByIds") {
+        return [
+          { Id: 101, Title: legacyTitle, Cover: "/cover1.jpg", Type: "Comic" },
+          { Id: 102, Title: legacyTitle, Cover: "/cover2.jpg", Type: "Comic" },
+          { Id: 103, Title: "误入的轻小说", Cover: "/cover3.jpg", Type: "Novel" },
+        ];
+      }
+      throw new Error(`未预期的 hubCall: ${target}`);
+    };
+
+    const res = await source.favorites.loadComics(1, "__root__");
+
+    // 3. 验证 BookInList.Type='Novel' 绝不进入漫画结果
+    const novelFound = res.comics.some((c) => c.id.includes("103") || c.title === "误入的轻小说");
+    assert.strictEqual(novelFound, false, "BookInList.Type='Novel' 绝不得出现在漫画书架结果中");
+
+    // 4. 验证两本同名漫画各自获得唯一且确定的复合 ID
+    assert.strictEqual(res.comics.length, 2);
+    assert.strictEqual(res.comics[0].id, `${legacyTitle}@@book:101`);
+    assert.strictEqual(res.comics[1].id, `${legacyTitle}@@book:102`);
+    assert.notStrictEqual(res.comics[0].id, res.comics[1].id, "不同 Book.Id 即使同名也必须生成不同的唯一复合 ID");
+
+    // 5. 关键回归防护：验证加载书架列表绝不改写/污染已有的 legacy 标题代表映射
+    const persistentIdAfter = source._getPersistentSeriesBookId(legacyTitle);
+    assert.strictEqual(
+      persistentIdAfter,
+      999,
+      "书架列表加载严禁改写持久化 legacy 标题代表映射（必须保持为 999）",
+    );
+    const memRepId = source._seriesRepresentativeBookIds.get(
+      source._seriesCacheKey(legacyTitle, source.apiBase, source._authGeneration),
+    );
+    assert.strictEqual(
+      memRepId,
+      999,
+      "书架列表加载严禁改写内存中的 legacy 标题代表映射（必须保持为 999）",
+    );
+  });
+
+  // 79. 普通漫画列表更新时间本地时区格式化、多偏移转换、非法降级与详情原始 ISO 时间保持
+  await test("79. 普通漫画列表更新时间本地时区格式化、多偏移转换、非法降级与详情原始 ISO 时间保持", async () => {
+    const isoTime = "2026-09-26T04:30:15Z";
+
+    // 1. 受控多时区环境下的固定期望展示（UTC+8 / UTC+9 / UTC-4 / UTC-5 跨日边界）
+    {
+      // UTC+8 (北京时间): 04:30:15 -> 12:30:15
+      const { source: sourceUtc8 } = createSourceHarness({}, {}, { Date: createTimezoneDateClass(480) });
+      const itemUtc8 = sourceUtc8._comicFromListItem({
+        Id: 301,
+        Title: "北京时间漫画",
+        Count: 24,
+        LastUpdatedAt: isoTime,
+      });
+      assert.strictEqual(
+        itemUtc8.description,
+        "共 24 话 · 更新: 2026-09-26 12:30:15",
+        "UTC+8 时区下普通列表应展示 12:30:15",
+      );
+
+      // UTC+9 (东京时间): 04:30:15 -> 13:30:15
+      const { source: sourceUtc9 } = createSourceHarness({}, {}, { Date: createTimezoneDateClass(540) });
+      const itemUtc9 = sourceUtc9._comicFromListItem({
+        Id: 302,
+        Title: "东京时间漫画",
+        Count: 24,
+        LastUpdatedAt: isoTime,
+      });
+      assert.strictEqual(
+        itemUtc9.description,
+        "共 24 话 · 更新: 2026-09-26 13:30:15",
+        "UTC+9 时区下普通列表应展示 13:30:15",
+      );
+
+      // UTC-4 (大西洋时间): 04:30:15 -> 00:30:15
+      const { source: sourceUtcm4 } = createSourceHarness({}, {}, { Date: createTimezoneDateClass(-240) });
+      const itemUtcm4 = sourceUtcm4._comicFromListItem({
+        Id: 303,
+        Title: "负偏移漫画",
+        Count: 24,
+        LastUpdatedAt: isoTime,
+      });
+      assert.strictEqual(
+        itemUtcm4.description,
+        "共 24 话 · 更新: 2026-09-26 00:30:15",
+        "UTC-4 时区下普通列表应展示 00:30:15",
+      );
+
+      // UTC-5 (跨日边界): 04:30:15 -> 前一日 2026-09-25 23:30:15
+      const { source: sourceUtcm5 } = createSourceHarness({}, {}, { Date: createTimezoneDateClass(-300) });
+      const itemUtcm5 = sourceUtcm5._comicFromListItem({
+        Id: 304,
+        Title: "跨日负偏移漫画",
+        Count: 24,
+        LastUpdatedAt: isoTime,
+      });
+      assert.strictEqual(
+        itemUtcm5.description,
+        "共 24 话 · 更新: 2026-09-25 23:30:15",
+        "UTC-5 时区下跨日边界应正确显示为前一日 2026-09-25 23:30:15",
+      );
+    }
+
+    // 2. 接口毫秒截断与带时区偏移 ISO 转换
+    {
+      const { source } = createSourceHarness({}, {}, { Date: createTimezoneDateClass(480) });
+
+      // 含毫秒的 UTC ISO (截断至秒级)
+      const itemMs = source._comicFromListItem({
+        Id: 305,
+        Title: "毫秒漫画",
+        Count: 12,
+        LastUpdatedAt: "2026-09-26T04:30:15.888Z",
+      });
+      assert.strictEqual(
+        itemMs.description,
+        "共 12 话 · 更新: 2026-09-26 12:30:15",
+        "含毫秒的 UTC ISO 应正确截断毫秒并格式化为本地时间",
+      );
+
+      // 携带显式时区偏移的 ISO 字符串（例如 +09:00 与 -05:00 代表同一 UTC 时刻 2026-09-26T04:30:15Z）
+      const itemOffsetJst = source._comicFromListItem({
+        Id: 306,
+        Title: "JST偏移漫画",
+        Count: 12,
+        LastUpdatedAt: "2026-09-26T13:30:15+09:00",
+      });
+      const itemOffsetEst = source._comicFromListItem({
+        Id: 307,
+        Title: "EST偏移漫画",
+        Count: 12,
+        LastUpdatedAt: "2026-09-25T23:30:15-05:00",
+      });
+      assert.strictEqual(
+        itemOffsetJst.description,
+        "共 12 话 · 更新: 2026-09-26 12:30:15",
+        "输入不同时区偏移的等价时刻在目标时区下应展示一致的本地时间",
+      );
+      assert.strictEqual(
+        itemOffsetEst.description,
+        "共 12 话 · 更新: 2026-09-26 12:30:15",
+        "输入跨日时区偏移的等价时刻在目标时区下应展示一致的本地时间",
+      );
+    }
+
+    // 3. 空值与非法值安全降级
+    {
+      const { source } = createSourceHarness();
+
+      // 空值测试（空字符串、null、未提供）
+      const itemEmptyStr = source._comicFromListItem({
+        Id: 401,
+        Title: "空时间漫画",
+        Count: 5,
+        LastUpdatedAt: "",
+      });
+      assert.strictEqual(itemEmptyStr.description, "共 5 话", "空更新时间不应生成更新文本");
+
+      const itemNull = source._comicFromListItem({
+        Id: 402,
+        Title: "Null时间漫画",
+        Count: 5,
+        LastUpdatedAt: null,
+      });
+      assert.strictEqual(itemNull.description, "共 5 话", "Null 更新时间不应生成更新文本");
+
+      const itemMissing = source._comicFromListItem({
+        Id: 403,
+        Title: "缺失时间漫画",
+        Count: 5,
+      });
+      assert.strictEqual(itemMissing.description, "共 5 话", "未提供更新时间不应生成更新文本");
+
+      // 非法字符串降级为原值，不抛异常
+      const itemInvalid = source._comicFromListItem({
+        Id: 405,
+        Title: "非法时间漫画",
+        Count: 5,
+        LastUpdatedAt: "not-a-valid-timestamp",
+      });
+      assert.strictEqual(
+        itemInvalid.description,
+        "共 5 话 · 更新: not-a-valid-timestamp",
+        "非法时间字符串必须安全降级为原字符串展示，严禁抛出异常",
+      );
+    }
+
+    // 4. 详情页（loadInfo / _loadInfo）保持原始 ISO 时间数据，严禁被格式化为本地无时区字符串
+    {
+      const { source } = createSourceHarness({}, {}, { Date: createTimezoneDateClass(480) });
+
+      const rawBookUpdated = "2026-09-26T04:30:15.000Z";
+      const rawBookCreated = "2026-01-01T10:00:00.000Z";
+
+      source._hubCall = async (target, params) => {
+        if (target === "GetBookInfo") {
+          return {
+            SeriesTitle: "详情时间测试漫画",
+            Series: [{ Id: 501, Title: "详情时间测试漫画" }],
+            Book: {
+              Id: 501,
+              Type: "Comic",
+              Title: "详情时间测试漫画",
+              LastUpdatedAt: rawBookUpdated,
+              CreatedAt: rawBookCreated,
+              Chapters: [],
+            },
+          };
+        }
+        throw new Error(`Unexpected Hub call: ${target}`);
+      };
+
+      const details = await source.comic.loadInfo("book:501");
+      assert.strictEqual(
+        details.updateTime,
+        rawBookUpdated,
+        "ComicDetails.updateTime 必须保持原始 ISO 8601 UTC 字符串，严禁在源侧转换为本地无时区时间",
+      );
+      assert.strictEqual(
+        details.uploadTime,
+        rawBookCreated,
+        "ComicDetails.uploadTime 必须保持原始 ISO 8601 UTC 字符串",
+      );
+    }
   });
 
   assert.strictEqual(

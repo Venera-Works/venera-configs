@@ -1,29 +1,16 @@
 /**
  * 轻书架 (LightNovelShelf) for Venera / VeneraNext
  *
- * 版本：0.4.4
+ * 版本：0.5.0
  *
- * 实现：
- * - ASP.NET Core SignalR JSON Hub Protocol
- * - WebSocket transport (skipNegotiation)
- * - 邮箱密码 / RefreshToken+x-id 登录并自动管理认证令牌
- * - RefreshToken -> session Token 自动刷新
- * - SignalR Bearer Token 认证
- * - 每日自动/手动签到
- * - 后台预连接 / WebSocket 长期连接与自动重连 / 单连接批量发现页（12 项）/ 24 项分类分页
- * - 9 次/5.5 秒请求调度器 / Gzip 响应解码
- * - 漫画阅读进度单向同步（Venera → 轻书架）
- * - 新版 GetBookInfo 单书漫画详情（每个 Book.Id 独立、同系列其他书位于详情“相关”、单层章节不跨书合并） / Book 评论与楼中楼回复
- * - 稳定 <Title>@@book:<id> 漫画身份模型 / 旧 SeriesTitle 通过官方历史与有界搜索安全恢复 / direct ID 直连跳过搜索
- * - 发现页多区块容错独立 settle / 正文 BookId 回填与阅读进度同步
- * - BookInfo TTL (60s) 缓存与容量淘汰 (64)
- * - 阅读器按 Target（logicalWidth/logicalHeight/devicePixelRatio/fit）自适应计算尺寸，按 256 阶梯量化与 256..4096 范围安全裁剪
  * 使用前：
  * 1. 邮箱登录：在 Venera 账号区域输入轻书架邮箱和密码。
- * 2. Token 登录：点击源设置底部的“Token 登录”，输入 RefreshToken|x-id。
- * 3. 支持使用 ， , ； ; 或 | 分隔 RefreshToken 和 x-id。
  */
 class LightNovelShelf extends ComicSource {
+  static shelfStructVersion = "20260921";
+  static shelfPageSize = 24;
+  static shelfRootId = "__root__";
+  static shelfCacheTtlMs = 3000;
   static discoveryPageSize = 12;
   static categoryPageSize = 24;
   static comicContentPageSize = 6;
@@ -50,7 +37,7 @@ class LightNovelShelf extends ComicSource {
 
   name = "轻书架";
   key = "LightNovelShelf";
-  version = "0.4.4";
+  version = "0.5.0";
   minAppVersion = "2.0.2";
   // 如果以后把本文件放到 GitHub，可改为 raw 文件地址用于在线更新。
   url = "https://cdn.jsdelivr.net/gh/miludeshiji/venera-configs@main/lightnovelshelf.js";
@@ -122,6 +109,18 @@ class LightNovelShelf extends ComicSource {
   _bookInfoCache = new Map();
   _bookInfoPromises = new Map();
   _seriesLoadPromises = new Map();
+
+  // 书架短时缓存、并发与写队列状态
+  _shelfCache = null;
+  _shelfFetchPromise = null;
+  _shelfFetchPromiseKey = "";
+  _shelfMutationQueue = Promise.resolve();
+  _shelfMutationGeneration = 0;
+  _shelfWritingCount = 0;
+
+  get _shelfWriting() {
+    return (this._shelfWritingCount || 0) > 0;
+  }
 
   get apiBase() {
     return this.loadSetting("apiServer") || "https://api.lightnovel.life";
@@ -449,6 +448,7 @@ class LightNovelShelf extends ComicSource {
     this._disconnectHub("Auth state invalidated");
     this._clearComicContentStates();
     this._resetReadingHistoryState();
+    this._clearShelfCache();
     this._sessionToken = "";
     this._sessionTokenAt = 0;
     this._sessionTokenGeneration = 0;
@@ -3724,6 +3724,28 @@ class LightNovelShelf extends ComicSource {
     const userName = this._value(user, "userName", "UserName", "");
     return userName ? String(userName) : "";
   }
+  _formatLocalDateTime(value) {
+    if (!value) {
+      return "";
+    }
+
+    const date = new Date(value);
+
+    if (!Number.isFinite(date.getTime())) {
+      return String(value);
+    }
+
+    const pad = (n) => String(n).padStart(2, "0");
+
+    return (
+      `${date.getFullYear()}-` +
+      `${pad(date.getMonth() + 1)}-` +
+      `${pad(date.getDate())} ` +
+      `${pad(date.getHours())}:` +
+      `${pad(date.getMinutes())}:` +
+      `${pad(date.getSeconds())}`
+    );
+  }
 
   _comicFromListItem(item) {
     const rawId = this._value(item, "id", "Id", null);
@@ -3741,6 +3763,8 @@ class LightNovelShelf extends ComicSource {
     const cover = this._value(item, "cover", "Cover", "") || "";
     this._rememberSeriesListMetadata(item);
 
+    const formattedUpdated = updated ? this._formatLocalDateTime(updated) : "";
+
     return {
       // Venera-host-safe identity: 保留标题并附加 @@book:<Book.Id> 确定性后缀；展示标题保持不变
       id: `${title}@@book:${bookId}`,
@@ -3750,7 +3774,7 @@ class LightNovelShelf extends ComicSource {
       tags: [],
       description: [
         count ? `共 ${count} 话` : "",
-        updated ? `更新: ${updated}` : "",
+        formattedUpdated ? `更新: ${formattedUpdated}` : "",
       ]
         .filter(Boolean)
         .join(" · "),
@@ -4166,6 +4190,610 @@ class LightNovelShelf extends ComicSource {
     );
   }
 
+  _clearShelfCache() {
+    this._shelfCache = null;
+    this._shelfFetchPromise = null;
+    this._shelfFetchPromiseKey = "";
+  }
+
+  _getRefreshTokenSafely() {
+    try {
+      const val = this.loadData("refreshToken");
+      return val ? String(val).trim() : "";
+    } catch (_) {
+      return "";
+    }
+  }
+
+  _shelfCacheKey(
+    apiBase = this.apiBase,
+    authGeneration = this._authGeneration,
+    refreshToken = this._getRefreshTokenSafely(),
+  ) {
+    return `${apiBase}\n${authGeneration}\n${refreshToken}`;
+  }
+
+  _isShelfComic(item) {
+    if (!item || typeof item !== "object") return false;
+    return (
+      String(this._value(item, "type", "Type", "")).toUpperCase() === "COMIC"
+    );
+  }
+
+  _isShelfNovel(item) {
+    if (!item || typeof item !== "object") return false;
+    return (
+      String(this._value(item, "type", "Type", "")).toUpperCase() === "NOVEL"
+    );
+  }
+
+  _isShelfFolder(item) {
+    if (!item || typeof item !== "object") return false;
+    return (
+      String(this._value(item, "type", "Type", "")).toUpperCase() === "FOLDER"
+    );
+  }
+
+  _buildShelfFolderParents(shelf, folderId) {
+    if (!folderId || String(folderId) === LightNovelShelf.shelfRootId) {
+      return [];
+    }
+
+    const folderMap = new Map();
+    for (const item of shelf) {
+      if (this._isShelfFolder(item)) {
+        const id = String(this._value(item, "id", "Id", ""));
+        if (id && id !== LightNovelShelf.shelfRootId) {
+          folderMap.set(id, item);
+        }
+      }
+    }
+
+    const targetFolder = folderMap.get(String(folderId));
+    if (!targetFolder) {
+      throw new Error("目标轻书架文件夹不存在");
+    }
+
+    const targetParents = this._value(targetFolder, "parents", "Parents", []);
+    const parentList = Array.isArray(targetParents)
+      ? targetParents.map(String)
+      : [];
+
+    // 确保全路径存在且关系正确
+    for (let i = 0; i < parentList.length; i++) {
+      const ancestorId = parentList[i];
+      const ancestor = folderMap.get(ancestorId);
+      if (!ancestor) {
+        throw new Error(`轻书架文件夹路径损坏: 上级文件夹 ${ancestorId} 不存在`);
+      }
+      const ancestorParents = this._value(ancestor, "parents", "Parents", []);
+      const expectedParents = parentList.slice(0, i);
+      const actualParents = Array.isArray(ancestorParents)
+        ? ancestorParents.map(String)
+        : [];
+      if (
+        actualParents.length !== expectedParents.length ||
+        !actualParents.every((val, idx) => val === expectedParents[idx])
+      ) {
+        throw new Error(`轻书架文件夹路径损坏: 文件夹 ${ancestorId} 层级关系不一致`);
+      }
+    }
+
+    return [...parentList, String(folderId)];
+  }
+
+  _normalizeShelfIndexes(items) {
+    // 稳定排序：首先按 index 升序，相同时按 parents 长度
+    const sorted = [...items].sort((a, b) => {
+      const ai = Number(this._value(a, "index", "Index", 0));
+      const bi = Number(this._value(b, "index", "Index", 0));
+      if (ai !== bi) {
+        return ai - bi;
+      }
+      const ap = this._value(a, "parents", "Parents", []);
+      const bp = this._value(b, "parents", "Parents", []);
+      const apLen = Array.isArray(ap) ? ap.length : 0;
+      const bpLen = Array.isArray(bp) ? bp.length : 0;
+      return apLen - bpLen;
+    });
+
+    const counters = new Map();
+    for (const item of sorted) {
+      const parents = this._value(item, "parents", "Parents", []);
+      const parentArr = Array.isArray(parents) ? parents.map(String) : [];
+      const key = JSON.stringify(parentArr);
+      const nextIndex = counters.get(key) || 0;
+      item.index = nextIndex;
+      if ("Index" in item) {
+        item.Index = nextIndex;
+      }
+      counters.set(key, nextIndex + 1);
+    }
+
+    return sorted;
+  }
+
+  _comicFromShelfBookItem(item) {
+    const rawId = this._value(item, "id", "Id", null);
+    const bookId = Number(rawId);
+    if (!Number.isSafeInteger(bookId) || bookId <= 0) {
+      throw new Error(`无效漫画 Book.Id: ${String(rawId)}`);
+    }
+    const title = String(this._value(item, "title", "Title", "") || "").trim();
+    if (!title) {
+      throw new Error("无效漫画标题");
+    }
+    const count = Number(this._value(item, "count", "Count", 0) || 0);
+    const original = String(
+      this._value(item, "originalTitle", "OriginalTitle", "") || "",
+    );
+    const updated = String(
+      this._value(item, "lastUpdatedAt", "LastUpdatedAt", "") || "",
+    );
+    const cover = String(this._value(item, "cover", "Cover", "") || "");
+
+    return {
+      // Venera-host-safe identity: 保留标题并附加 @@book:<Book.Id> 确定性后缀；展示标题保持不变
+      id: `${title}@@book:${bookId}`,
+      title: title,
+      subTitle: original || (count ? `${count} 话` : ""),
+      cover: this._normalizeUrl(cover),
+      tags: [],
+      description: [
+        count ? `共 ${count} 话` : "",
+        updated ? `更新: ${updated}` : "",
+      ]
+        .filter(Boolean)
+        .join(" · "),
+    };
+  }
+
+  async _getBookShelf(options = {}) {
+    const force = !!(options && options.force);
+    const raw = !!(options && options.raw);
+    const apiBase = this.apiBase;
+    const authGen = this._authGeneration;
+    const refreshToken = this._getRefreshTokenSafely();
+    const key = this._shelfCacheKey(apiBase, authGen, refreshToken);
+    const now = Date.now();
+
+    if (!force && !this._shelfWriting && this._shelfCache && this._shelfCache.key === key) {
+      if (now - this._shelfCache.timestamp < LightNovelShelf.shelfCacheTtlMs) {
+        const cachedItems = JSON.parse(JSON.stringify(this._shelfCache.items));
+        return raw
+          ? { items: cachedItems, version: this._shelfCache.version }
+          : cachedItems;
+      }
+    }
+
+    if (!force && !this._shelfWriting && this._shelfFetchPromise && this._shelfFetchPromiseKey === key) {
+      const snapshot = await this._shelfFetchPromise;
+      const clonedItems = JSON.parse(JSON.stringify(snapshot.items));
+      return raw
+        ? { items: clonedItems, version: snapshot.version }
+        : clonedItems;
+    }
+
+    const mutationGen = this._shelfMutationGeneration;
+    const fetchPromise = (async () => {
+      const data = await this._hubCall(
+        "GetBookShelf",
+        {},
+        { retryTransport: true },
+      );
+
+      let items;
+      let version = null;
+
+      if (Array.isArray(data)) {
+        items = data;
+      } else if (
+        data &&
+        typeof data === "object" &&
+        !Array.isArray(data) &&
+        Object.keys(data).length === 0
+      ) {
+        items = [];
+      } else if (data && typeof data === "object") {
+        const rawItems = this._value(data, "data", "Data", null);
+        if (!Array.isArray(rawItems)) {
+          throw new Error("轻书架书架响应缺少 data");
+        }
+        items = rawItems;
+        const rawVer = this._value(data, "ver", "Ver", null);
+        version = rawVer != null ? String(rawVer) : null;
+      } else {
+        throw new Error("轻书架书架响应格式异常");
+      }
+
+      const isCurrentSnapshot =
+        this._shelfMutationGeneration === mutationGen &&
+        this._authGeneration === authGen &&
+        this.apiBase === apiBase &&
+        this._getRefreshTokenSafely() === refreshToken;
+
+      // 写期间不得让并发只读缓存旧数据
+      if (isCurrentSnapshot && !this._shelfWriting) {
+        this._shelfCache = {
+          key: key,
+          items: JSON.parse(JSON.stringify(items)),
+          version: version,
+          timestamp: Date.now(),
+        };
+      }
+
+      return { items: items, version: version };
+    })();
+
+    if (!force) {
+      this._shelfFetchPromise = fetchPromise;
+      this._shelfFetchPromiseKey = key;
+    }
+
+    try {
+      const snapshot = await fetchPromise;
+      const clonedItems = JSON.parse(JSON.stringify(snapshot.items));
+      return raw
+        ? { items: clonedItems, version: snapshot.version }
+        : clonedItems;
+    } finally {
+      if (this._shelfFetchPromise === fetchPromise) {
+        this._shelfFetchPromise = null;
+        this._shelfFetchPromiseKey = "";
+      }
+    }
+  }
+
+  async _saveBookShelf(items, expectedVersion = null) {
+    if (
+      expectedVersion &&
+      expectedVersion !== LightNovelShelf.shelfStructVersion
+    ) {
+      throw new Error(
+        `轻书架书架结构版本已更新，请升级漫画源 (${expectedVersion})`,
+      );
+    }
+
+    try {
+      await this._hubCall(
+        "SaveBookShelf",
+        {
+          data: items,
+          ver: LightNovelShelf.shelfStructVersion,
+        },
+        {
+          retryTransport: false,
+        },
+      );
+    } finally {
+      this._clearShelfCache();
+    }
+  }
+
+  async _queueShelfMutation(task) {
+    const prevQueue = this._shelfMutationQueue;
+    let nextResolve;
+    this._shelfMutationQueue = new Promise((resolve) => {
+      nextResolve = resolve;
+    });
+
+    this._shelfMutationGeneration += 1;
+    this._shelfWritingCount = (this._shelfWritingCount || 0) + 1;
+    this._clearShelfCache();
+
+    try {
+      await prevQueue.catch(() => {});
+      this._clearShelfCache();
+      return await task();
+    } catch (err) {
+      this._clearShelfCache();
+      throw err;
+    } finally {
+      this._shelfMutationGeneration += 1;
+      this._shelfWritingCount = Math.max(0, (this._shelfWritingCount || 1) - 1);
+      this._clearShelfCache();
+      nextResolve();
+    }
+  }
+
+  async _setShelfComic(comicId, folderId, isAdding) {
+    const bookId = this._parseDirectBookId(comicId);
+    if (bookId === null) {
+      throw new Error("无法解析漫画 Book.Id");
+    }
+
+    // 写入前强制获取新快照与确定性响应版本
+    const snapshot = await this._getBookShelf({ force: true, raw: true });
+    const shelf = snapshot.items;
+    const version = snapshot.version;
+
+    if (version && version !== LightNovelShelf.shelfStructVersion) {
+      throw new Error(
+        `轻书架书架结构版本已更新，请升级漫画源 (${version})`,
+      );
+    }
+
+    const existingIndex = shelf.findIndex(
+      (item) =>
+        this._isShelfComic(item) &&
+        Number(this._value(item, "id", "Id", NaN)) === bookId,
+    );
+
+    const isSamePath = (a, b) => {
+      const arrA = Array.isArray(a) ? a : [];
+      const arrB = Array.isArray(b) ? b : [];
+      return (
+        arrA.length === arrB.length &&
+        arrA.every((v, i) => String(v) === String(arrB[i]))
+      );
+    };
+
+    if (!isAdding) {
+      // 移除仅对应 COMIC；如不存在则不产生无必要保存
+      if (existingIndex < 0) {
+        return;
+      }
+
+      shelf.splice(existingIndex, 1);
+      const normalized = this._normalizeShelfIndexes(shelf);
+      await this._saveBookShelf(normalized, version);
+      return;
+    }
+
+    const targetParents = this._buildShelfFolderParents(shelf, folderId);
+
+    if (existingIndex >= 0) {
+      const currentParents = this._value(
+        shelf[existingIndex],
+        "parents",
+        "Parents",
+        [],
+      );
+      if (isSamePath(currentParents, targetParents)) {
+        // 已经在目标目录中，避免额外写入
+        return;
+      }
+
+      // 移动到已有目录：排在目标目录开头 (index=0)，目标目录其他条目顺延
+      const targetItem = shelf[existingIndex];
+      targetItem.parents = targetParents;
+      if ("Parents" in targetItem) {
+        targetItem.Parents = targetParents;
+      }
+      targetItem.index = 0;
+      if ("Index" in targetItem) {
+        targetItem.Index = 0;
+      }
+      targetItem.updateAt = new Date().toISOString();
+
+      for (const item of shelf) {
+        if (item !== targetItem) {
+          const itemParents = this._value(item, "parents", "Parents", []);
+          if (isSamePath(itemParents, targetParents)) {
+            const nextIdx = Number(this._value(item, "index", "Index", 0)) + 1;
+            item.index = nextIdx;
+            if ("Index" in item) {
+              item.Index = nextIdx;
+            }
+          }
+        }
+      }
+    } else {
+      // 新增条目：排在目标目录开头 (index=0)，目标目录其他条目顺延
+      for (const item of shelf) {
+        const itemParents = this._value(item, "parents", "Parents", []);
+        if (isSamePath(itemParents, targetParents)) {
+          const nextIdx = Number(this._value(item, "index", "Index", 0)) + 1;
+          item.index = nextIdx;
+          if ("Index" in item) {
+            item.Index = nextIdx;
+          }
+        }
+      }
+
+      const newItem = {
+        id: bookId,
+        type: "COMIC",
+        index: 0,
+        parents: targetParents,
+        updateAt: new Date().toISOString(),
+      };
+      shelf.unshift(newItem);
+    }
+
+    const normalized = this._normalizeShelfIndexes(shelf);
+    await this._saveBookShelf(normalized, version);
+  }
+
+  async _loadShelfFolders(comicId) {
+    const shelf = await this._getBookShelf();
+
+    const folders = {
+      [LightNovelShelf.shelfRootId]: "根目录",
+    };
+
+    const folderItems = shelf.filter((item) => this._isShelfFolder(item));
+    const folderMap = new Map();
+    for (const item of folderItems) {
+      const id = String(this._value(item, "id", "Id", ""));
+      if (id && id !== LightNovelShelf.shelfRootId) {
+        folderMap.set(id, item);
+      }
+    }
+
+    const getFolderPath = (folder) => {
+      const parents = this._value(folder, "parents", "Parents", []);
+      const names = [];
+
+      for (const id of Array.isArray(parents) ? parents : []) {
+        const parent = folderMap.get(String(id));
+        if (!parent) continue;
+        const title = this._value(parent, "title", "Title", "");
+        if (title) {
+          names.push(String(title));
+        }
+      }
+
+      const selfTitle = this._value(folder, "title", "Title", "");
+      if (selfTitle) {
+        names.push(String(selfTitle));
+      }
+
+      return names.join(" / ");
+    };
+
+     for (const folder of folderItems) {
+      const id = String(this._value(folder, "id", "Id", ""));
+      if (!id || id === LightNovelShelf.shelfRootId) continue;
+      const pathTitle = getFolderPath(folder);
+      folders[id] = pathTitle || id;
+    }
+
+    const favorited = [];
+    const bookId = this._parseDirectBookId(comicId);
+
+    if (bookId !== null) {
+      const item = shelf.find(
+        (entry) =>
+          this._isShelfComic(entry) &&
+          Number(this._value(entry, "id", "Id", NaN)) === bookId,
+      );
+
+      if (item) {
+        const parents = this._value(item, "parents", "Parents", []);
+        if (!Array.isArray(parents) || parents.length === 0) {
+          favorited.push(LightNovelShelf.shelfRootId);
+        } else {
+          favorited.push(String(parents[parents.length - 1]));
+        }
+      }
+    }
+
+    return {
+      folders: folders,
+      favorited: favorited,
+    };
+  }
+
+  async _loadShelfComics(page, folderId) {
+    const shelf = await this._getBookShelf();
+
+    const isTargetFolder = (item) => {
+      if (!this._isShelfComic(item)) return false;
+      const rawParents = this._value(item, "parents", "Parents", []);
+      const parents = Array.isArray(rawParents) ? rawParents : [];
+      if (!folderId || String(folderId) === LightNovelShelf.shelfRootId) {
+        return parents.length === 0;
+      }
+      return (
+        parents.length > 0 &&
+        String(parents[parents.length - 1]) === String(folderId)
+      );
+    };
+
+    const folderComics = shelf.filter(isTargetFolder);
+    folderComics.sort((a, b) => {
+      const ai = Number(this._value(a, "index", "Index", 0));
+      const bi = Number(this._value(b, "index", "Index", 0));
+      return ai - bi;
+    });
+
+    const bookIds = [];
+    for (const item of folderComics) {
+      const rawId = this._value(item, "id", "Id", null);
+      const idNum = Number(rawId);
+      if (Number.isSafeInteger(idNum) && idNum > 0) {
+        bookIds.push(idNum);
+      }
+    }
+    const pageSize = LightNovelShelf.shelfPageSize;
+    const maxPage = Math.max(1, Math.ceil(folderComics.length / pageSize));
+    const currentPage = Math.max(1, Number(page) || 1);
+    const pageItems = folderComics.slice(
+      (currentPage - 1) * pageSize,
+      currentPage * pageSize,
+    );
+
+    const pageIds = [];
+    const seenIds = new Set();
+    for (const item of pageItems) {
+      const rawId = this._value(item, "id", "Id", null);
+      const idNum = Number(rawId);
+      if (Number.isSafeInteger(idNum) && idNum > 0 && !seenIds.has(idNum)) {
+        seenIds.add(idNum);
+        pageIds.push(idNum);
+      }
+    }
+
+    if (pageIds.length === 0) {
+      return {
+        comics: [],
+        maxPage: maxPage,
+      };
+    }
+
+    const data = await this._hubCall(
+      "GetBookListByIds",
+      {
+        Ids: pageIds,
+      },
+      { retryTransport: true },
+    );
+
+    if (!data || typeof data !== "object") {
+      throw new Error("轻书架书籍列表响应格式异常");
+    }
+
+    const rawList = Array.isArray(data)
+      ? data
+      : this._value(data, "data", "Data", null);
+    if (!Array.isArray(rawList)) {
+      throw new Error("轻书架书籍列表响应缺少 data");
+    }
+
+    const requestedSet = new Set(pageIds);
+    const itemMap = new Map();
+
+    for (const item of rawList) {
+      if (!item || typeof item !== "object") continue;
+      const rawId = this._value(item, "id", "Id", null);
+      const bookId = Number(rawId);
+      if (!Number.isSafeInteger(bookId) || bookId <= 0) continue;
+      if (!requestedSet.has(bookId)) continue;
+
+      // 如果无 Type 可兼容旧服，但有明确 Type:'Novel' 的记录即使书架为 COMIC 也不可展示为漫画
+      const type = String(
+        this._value(item, "type", "Type", "") || "",
+      ).toUpperCase();
+      if (type === "NOVEL") {
+        continue;
+      }
+
+      itemMap.set(bookId, item);
+    }
+
+    const comics = [];
+    const seenComicIds = new Set();
+    for (const id of pageIds) {
+      const item = itemMap.get(id);
+      if (!item) continue;
+      try {
+        const comic = this._comicFromShelfBookItem(item);
+        if (comic && comic.id && !seenComicIds.has(comic.id)) {
+          seenComicIds.add(comic.id);
+          comics.push(comic);
+        }
+      } catch (_) {
+        // 忽略单个格式畸变的条目
+      }
+    }
+
+    return {
+      comics: comics,
+      maxPage: maxPage,
+    };
+  }
+
   init() {
     if (!this.isLogged) return;
 
@@ -4185,6 +4813,26 @@ class LightNovelShelf extends ComicSource {
 
     logout: () => {
       this._clearAuthCredentials("User logout");
+    },
+  };
+
+  favorites = {
+    multiFolder: true,
+    singleFolderForSingleComic: true,
+
+    loadFolders: async (comicId) => {
+      return await this._loadShelfFolders(comicId);
+    },
+
+    loadComics: async (page, folderId) => {
+      return await this._loadShelfComics(page, folderId);
+    },
+
+    addOrDelFavorite: async (comicId, folderId, isAdding) => {
+      const adding = isAdding === true || String(isAdding) === "true";
+      await this._queueShelfMutation(() =>
+        this._setShelfComic(comicId, folderId, adding),
+      );
     },
   };
 
