@@ -1,7 +1,7 @@
 /**
  * 轻书架 (LightNovelShelf) for Venera / VeneraNext
  *
- * 版本：1.0.0
+ * 版本：1.0.1
  *
  * 使用前：
  * 1. 邮箱登录：在 Venera 账号区域输入轻书架邮箱和密码。
@@ -37,7 +37,7 @@ class LightNovelShelf extends ComicSource {
 
   name = "轻书架";
   key = "LightNovelShelf";
-  version = "1.0.0";
+  version = "1.0.1";
   minAppVersion = "2.0.2";
   // 如果以后把本文件放到 GitHub，可改为 raw 文件地址用于在线更新。
   url = "https://cdn.jsdelivr.net/gh/miludeshiji/venera-configs@main/lightnovelshelf.js";
@@ -2017,6 +2017,92 @@ class LightNovelShelf extends ComicSource {
     }
 
     return fallback;
+  }
+
+  _htmlToPlainText(value) {
+    if (value === null || value === undefined) return "";
+
+    const raw = String(value);
+    if (!raw.trim()) return "";
+
+    const normalize = (text) =>
+      String(text || "")
+        .replace(/\u00a0/g, " ")
+        .replace(/\r\n?/g, "\n")
+        .replace(/[ \t]+\n/g, "\n")
+        .replace(/\n[ \t]+/g, "\n")
+        .replace(/\n{3,}/g, "\n\n")
+        .trim();
+
+    // 普通纯文本与比较字符（如 "1 < 2 与 3 > 1"）快速放行。
+    if (!/<[a-zA-Z\/!]|&[a-zA-Z0-9#]+;/i.test(raw)) {
+      return normalize(raw);
+    }
+
+    let html = raw.trim();
+
+    // 移除脚本与样式内容，含未闭合块。
+    html = html
+      .replace(/<script\b[\s\S]*?(?:<\/script\s*>|$)/gi, "")
+      .replace(/<style\b[\s\S]*?(?:<\/style\s*>|$)/gi, "");
+
+    // 语义换行与列表项。
+    html = html
+      .replace(/<br\s*\/?>/gi, "\n")
+      .replace(/<\/p\s*>/gi, "\n\n")
+      .replace(/<\/div\s*>/gi, "\n")
+      .replace(/<\/blockquote\s*>/gi, "\n")
+      .replace(/<li\b[^>]*>/gi, "• ")
+      .replace(/<\/li\s*>\s*/gi, "\n")
+      .replace(/<\/h[1-6]\s*>/gi, "\n");
+
+    let document = null;
+    try {
+      if (typeof HtmlDocument === "function") {
+        document = new HtmlDocument(
+          `<div id="venera-description">${html}</div>`,
+        );
+        const root = document.getElementById("venera-description");
+        if (root) {
+          return normalize(root.text);
+        }
+      }
+    } catch (_) {
+      // 解析失败降级。
+    } finally {
+      if (document && typeof document.dispose === "function") {
+        try {
+          document.dispose();
+        } catch (_) {}
+      }
+    }
+
+    // 降级：仅去除有效标签以保留普通比较字符，解码基础实体。
+    return normalize(
+      html
+        .replace(
+          /<(?:\/?[a-zA-Z][^\s>]*|!--[\s\S]*?--|![^>]*)(?:\s+[^>]*)?>/gi,
+          "",
+        )
+        .replace(/&(amp|lt|gt|quot|apos|nbsp);/gi, (match) => {
+          switch (match.toLowerCase()) {
+            case "&amp;":
+              return "&";
+            case "&lt;":
+              return "<";
+            case "&gt;":
+              return ">";
+            case "&quot;":
+              return '"';
+            case "&apos;":
+              return "'";
+            case "&nbsp;":
+              return " ";
+            default:
+              return match;
+          }
+        }),
+    );
   }
 
   _comicChapterId(value) {
@@ -4891,8 +4977,9 @@ class LightNovelShelf extends ComicSource {
         "";
       const rawTags = this._value(classification, "tags", "Tags", []);
       const tags = Array.isArray(rawTags) ? rawTags : [];
-      const description =
-        this._value(book, "introduction", "Introduction", "") || "";
+      const description = this._htmlToPlainText(
+        this._value(book, "introduction", "Introduction", "") || "",
+      );
       const originalTitle = metadata ? metadata.originalTitle : "";
 
       const tagMap = {};
@@ -5015,7 +5102,7 @@ class LightNovelShelf extends ComicSource {
           this._value(item, "seriesTitle", "SeriesTitle", seriesTitle) ||
             seriesTitle,
         ).trim();
-        const relatedDesc = String(
+        const relatedDesc = this._htmlToPlainText(
           this._value(item, "introduction", "Introduction", "") ||
             this._value(item, "description", "Description", "") ||
             "",
