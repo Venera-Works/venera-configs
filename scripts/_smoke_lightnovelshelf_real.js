@@ -396,7 +396,7 @@ async function runSmoke() {
   try {
     // 1. 测试 Token 刷新
     console.log("\n[1/9] 验证 refresh 接口...");
-    const sessionToken = await source._ensureSessionToken(true);
+    const sessionToken = await source._refreshSessionToken(true);
     if (!sessionToken || typeof sessionToken !== "string") {
       throw new Error("refresh 响应未获取到有效 SessionToken");
     }
@@ -454,7 +454,6 @@ async function runSmoke() {
     console.log(
       `\n[3/9] 验证 direct ID (${expectedDirectId}) 冷启动加载（断言坚决不发起搜索）...`,
     );
-    source._deleteSeriesBookMapping(rawFirstTitle, rawFirstId);
     source._clearComicContentStates();
 
     let searchCalledDuringDirect = false;
@@ -489,7 +488,11 @@ async function runSmoke() {
     console.log(
       `\n[4/9] 验证 legacy 标题安全恢复与有界搜索诊断 (目标: “${legacyTitle}”)...`,
     );
-    source._deleteSeriesBookMapping(legacyTitle);
+    const persistentMap = source._getPersistentSeriesBookMap(source.apiBase);
+    if (persistentMap.has(legacyTitle)) {
+      persistentMap.delete(legacyTitle);
+      source._savePersistentSeriesBookMap(persistentMap, source.apiBase);
+    }
     source._seriesRepresentativeBookIds.clear();
     source._seriesRepresentativeBookIdSources.clear();
     source._seriesNegativeCache.clear();

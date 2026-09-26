@@ -65,6 +65,21 @@
 
 ### 0.5.0
 - 升级对接官方书架 20260921 规范，支持浏览已有多级目录并管理漫画收藏。
+- 维护优化：在完全保持行为兼容的前提下精简 `lightnovelshelf.js` 实现，清理未使用的废弃辅助方法，统一复用卡片转换逻辑、认证状态清理以及缓存键生成；单文件导入、已持久化 ID、书架结构以及读写重试契约保持不变。
+
+## 测试与验证
+
+- **离线契约测试**（无需网络与凭据，覆盖 Venera 运行时与 SignalR 契约）：
+  ```bash
+  node scripts/_test_lightnovelshelf.js
+  ```
+- **只读真实环境 Smoke 验证**（可选，需真实账号凭据；严格只读探测，不发送任何修改状态请求）：
+  ```bash
+  # 命令行参数
+  node scripts/_smoke_lightnovelshelf_real.js "<RefreshToken|x-id>"
+  # 环境变量
+  LIGHTNOVELSHELF_REFRESH_TOKEN="..." LIGHTNOVELSHELF_X_ID="..." node scripts/_smoke_lightnovelshelf_real.js
+  ```
 
 ## 仓库文件
 

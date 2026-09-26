@@ -3405,7 +3405,7 @@ async function runTests() {
     assert.strictEqual(source._knownComicPageCount("book:200", 2001), 6);
   });
 
-  await test("54. 来源追踪解析与精准删除标题映射方法验证", async () => {
+  await test("54. 来源追踪解析方法验证", async () => {
     const { source } = createSourceHarness();
 
     // 1. direct ID 来源追踪
@@ -3488,32 +3488,6 @@ async function runTests() {
     assert.strictEqual(exactRes.id, 789);
     assert.strictEqual(exactRes.bookId, 789);
     assert.strictEqual(exactRes.source, "title");
-    // 5. 精准删除标题映射
-    source._bookInfoCache.set(source._bookInfoCacheKey(456), {
-      data: {
-        seriesTitle: "持久追踪漫画",
-        series: [],
-        book: { id: 456, type: "Comic", chapters: [] },
-      },
-      fetchedAt: Date.now(),
-    });
-    assert.ok(source._bookInfoCache.has(source._bookInfoCacheKey(456)));
-
-    source._deleteSeriesBookMapping("持久追踪漫画", 456);
-    assert.strictEqual(
-      source._getPersistentSeriesBookId("持久追踪漫画"),
-      null,
-    );
-    assert.strictEqual(
-      source._seriesRepresentativeBookIds.has(
-        source._seriesCacheKey("持久追踪漫画"),
-      ),
-      false,
-    );
-    assert.strictEqual(
-      source._bookInfoCache.has(source._bookInfoCacheKey(456)),
-      false,
-    );
   });
 
   await test("55. 真实 smoke 主路径：direct book:<id> 安全形态诊断与 loadInfo 零搜索验证", async () => {
