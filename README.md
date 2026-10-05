@@ -73,6 +73,13 @@
 
 ## 版本变化
 
+### 绅士漫画 1.0.7
+- 同步上游更新（[PR #339](https://github.com/venera-app/venera-configs/pull/339)）：
+  - 支持合集目录及按所选章节阅读。
+  - 修复收藏夹包含合集时的加载失败。
+  - 修正标签范围、合集缩略图及缺少分页器时的加载。
+- 本 fork 发布版本号标记为 1.0.7，以避免与此前已发布的 1.0.6 发生冲突，并保留 Venera-Works 在线更新地址。
+
 ### 1.0.2
 - 仓库迁移至 [Venera-Works/venera-configs](https://github.com/Venera-Works/venera-configs)，更新漫画源在线更新地址与仓库索引。
 
