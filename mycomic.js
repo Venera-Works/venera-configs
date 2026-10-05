@@ -177,11 +177,11 @@ class MyComic extends ComicSource {
 
     key = "mycomic";
 
-    version = "1.1.0";
+    version = "1.1.1";
 
     minAppVersion = "1.4.6";
 
-    url = "https://cdn.jsdelivr.net/gh/miludeshiji/venera-configs@main/mycomic.js";
+    url = "https://cdn.jsdelivr.net/gh/Venera-Works/venera-configs@main/mycomic.js";
 
     init() {
         // Check if cf_clearance cookie exists; if not, the user may need to "login"

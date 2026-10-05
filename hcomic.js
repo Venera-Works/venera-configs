@@ -5,12 +5,12 @@ class HComic extends ComicSource {
     // Unique id of the source
     key = "hcomic"
 
-    version = "1.0.0"
+    version = "1.0.1"
 
     minAppVersion = "1.6.0"
 
     // Update url
-    url = "https://cdn.jsdelivr.net/gh/miludeshiji/venera-configs@main/hcomic.js"
+    url = "https://cdn.jsdelivr.net/gh/Venera-Works/venera-configs@main/hcomic.js"
 
     baseUrl = "https://h-comic.com"
 

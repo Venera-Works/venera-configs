@@ -1,7 +1,7 @@
 /**
  * 轻书架 (LightNovelShelf) for Venera / VeneraNext
  *
- * 版本：1.0.1
+ * 版本：1.0.2
  *
  * 使用前：
  * 1. 邮箱登录：在 Venera 账号区域输入轻书架邮箱和密码。
@@ -37,10 +37,10 @@ class LightNovelShelf extends ComicSource {
 
   name = "轻书架";
   key = "LightNovelShelf";
-  version = "1.0.1";
+  version = "1.0.2";
   minAppVersion = "2.0.2";
-  // 如果以后把本文件放到 GitHub，可改为 raw 文件地址用于在线更新。
-  url = "https://cdn.jsdelivr.net/gh/miludeshiji/venera-configs@main/lightnovelshelf.js";
+  // 在线更新地址
+  url = "https://cdn.jsdelivr.net/gh/Venera-Works/venera-configs@main/lightnovelshelf.js";
 
   // 当前短期会话 Token，仅保存在当前 JS 运行实例中。
   _sessionToken = "";

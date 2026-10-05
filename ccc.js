@@ -8,12 +8,12 @@ class CCC extends ComicSource {
     // unique id of the source
     key = "ccc"
 
-    version = "1.0.1"
+    version = "1.0.2"
 
     minAppVersion = "1.6.0"
 
     // update url
-    url = "https://cdn.jsdelivr.net/gh/miludeshiji/venera-configs@main/ccc.js"
+    url = "https://cdn.jsdelivr.net/gh/Venera-Works/venera-configs@main/ccc.js"
 
     apiUrl = "https://api.creative-comic.tw"
 

@@ -7,7 +7,7 @@ class JM extends ComicSource {
     // unique id of the source
     key = "jm"
 
-    version = "1.4.0"
+    version = "1.4.1"
 
     minAppVersion = "1.5.0"
 
@@ -16,7 +16,7 @@ class JM extends ComicSource {
     static jmPkgName = "com.example.app"
 
     // update url
-    url = "https://cdn.jsdelivr.net/gh/miludeshiji/venera-configs@main/jm.js"
+    url = "https://cdn.jsdelivr.net/gh/Venera-Works/venera-configs@main/jm.js"
 
     dailyCheckInInProgress = false
 

@@ -2,9 +2,9 @@
 class YKMHSource extends ComicSource {
     name = "优酷漫画"
     key = "ykmh"
-    version = "1.0.0"
+    version = "1.0.1"
     minAppVersion = "1.4.0"
-    url = "https://cdn.jsdelivr.net/gh/miludeshiji/venera-configs@main/ykmh.js"
+    url = "https://cdn.jsdelivr.net/gh/Venera-Works/venera-configs@main/ykmh.js"
 
     get baseUrl() {
         return "https://www.ykmh.net";

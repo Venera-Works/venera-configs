@@ -2,9 +2,9 @@ class Happy extends ComicSource {
     // 漫画源基本信息
     name = "嗨皮漫画"
     key = "happy"
-    version = "1.0.0"
+    version = "1.0.1"
     minAppVersion = "1.6.0"
-    url = "https://cdn.jsdelivr.net/gh/miludeshiji/venera-configs@main/happy.js"
+    url = "https://cdn.jsdelivr.net/gh/Venera-Works/venera-configs@main/happy.js"
 
     // 基础URL
     baseUrl = "https://m.happymh.com"

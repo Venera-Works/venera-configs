@@ -4,11 +4,11 @@ class Kavita extends ComicSource {
 
     key = "kavita"
 
-    version = "1.0.0"
+    version = "1.0.1"
 
     minAppVersion = "1.4.0"
 
-    url = "https://cdn.jsdelivr.net/gh/miludeshiji/venera-configs@main/kavita.js"
+    url = "https://cdn.jsdelivr.net/gh/Venera-Works/venera-configs@main/kavita.js"
 
     settings = {
         base_url: {

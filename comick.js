@@ -1,10 +1,10 @@
 class Comick extends ComicSource {
     name = "comick"
     key = "comick"
-    version = "1.2.0"
+    version = "1.2.1"
     minAppVersion = "1.4.0"
     // update url
-    url = "https://cdn.jsdelivr.net/gh/miludeshiji/venera-configs@main/comick.js"
+    url = "https://cdn.jsdelivr.net/gh/Venera-Works/venera-configs@main/comick.js"
 
     settings = {
         domains: {

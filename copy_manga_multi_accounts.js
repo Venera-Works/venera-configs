@@ -4,11 +4,11 @@ class CopyManga extends ComicSource {
 
     key = "copy_manga"
 
-    version = "1.4.3"
+    version = "1.4.4"
 
     minAppVersion = "1.6.0"
 
-    url = "https://cdn.jsdelivr.net/gh/miludeshiji/venera-configs@main/copy_manga_multi_accounts.js"
+    url = "https://cdn.jsdelivr.net/gh/Venera-Works/venera-configs@main/copy_manga_multi_accounts.js"
 
     async getReqID() {
         if (this.copyRegion === "0") {

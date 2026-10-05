@@ -8,12 +8,12 @@ class MangaDex extends ComicSource {
     // unique id of the source
     key = "manga_dex"
 
-    version = "1.2.0"
+    version = "1.2.1"
 
     minAppVersion = "1.6.0"
 
     // update url
-    url = "https://cdn.jsdelivr.net/gh/miludeshiji/venera-configs@main/manga_dex.js"
+    url = "https://cdn.jsdelivr.net/gh/Venera-Works/venera-configs@main/manga_dex.js"
 
     comicsPerPage = 20
 

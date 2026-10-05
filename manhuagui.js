@@ -4,11 +4,11 @@ class ManHuaGui extends ComicSource {
 
   key = "ManHuaGui";
 
-  version = "1.2.1";
+  version = "1.2.2";
 
   minAppVersion = "1.4.0";
 
-  url = "https://cdn.jsdelivr.net/gh/miludeshiji/venera-configs@main/manhuagui.js";
+  url = "https://cdn.jsdelivr.net/gh/Venera-Works/venera-configs@main/manhuagui.js";
 
   baseUrl = "https://www.manhuagui.com";
 

@@ -116,12 +116,12 @@ class Goda extends ComicSource {
   // 源唯一标识
   key = "goda"
 
-  version = "1.2.1"
+  version = "1.2.2"
 
   minAppVersion = "1.4.0"
 
   // 更新地址
-  url = "https://cdn.jsdelivr.net/gh/miludeshiji/venera-configs@main/goda.js"
+  url = "https://cdn.jsdelivr.net/gh/Venera-Works/venera-configs@main/goda.js"
 
   settings = {
     domains: {

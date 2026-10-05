@@ -126,11 +126,11 @@ class JComic extends ComicSource {
   name = "jcomic.net";
   key = "jcomic";
 
-  version = "1.0.0";
+  version = "1.0.1";
   minAppVersion = "1.4.6";
 
   url =
-    "https://cdn.jsdelivr.net/gh/miludeshiji/venera-configs@main/jcomic.js";
+    "https://cdn.jsdelivr.net/gh/Venera-Works/venera-configs@main/jcomic.js";
 
   currentComic = null;
 

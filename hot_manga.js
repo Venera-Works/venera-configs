@@ -10,11 +10,11 @@ class HotManga extends ComicSource {
 
     key = "hot_manga"
 
-    version = "1.0.0"
+    version = "1.0.1"
 
     minAppVersion = "1.6.0"
 
-    url = "https://cdn.jsdelivr.net/gh/miludeshiji/venera-configs@main/hot_manga.js";
+    url = "https://cdn.jsdelivr.net/gh/Venera-Works/venera-configs@main/hot_manga.js";
 
     static defaultImageQuality = "1500"
 

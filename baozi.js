@@ -5,12 +5,12 @@ class Baozi extends ComicSource {
   // 唯一标识符
   key = "baozi";
 
-  version = "1.1.6";
+  version = "1.1.7";
 
   minAppVersion = "1.0.0";
 
   // 更新链接
-  url = "https://cdn.jsdelivr.net/gh/miludeshiji/venera-configs@main/baozi.js";
+  url = "https://cdn.jsdelivr.net/gh/Venera-Works/venera-configs@main/baozi.js";
 
   settings = {
     language: {

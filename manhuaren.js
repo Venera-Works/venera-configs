@@ -4,11 +4,11 @@ class ManHuaRen extends ComicSource {
 
     key = "manhuaren"
 
-    version = "1.0.0"
+    version = "1.0.1"
 
     minAppVersion = "1.6.0"
 
-    url = "https://cdn.jsdelivr.net/gh/miludeshiji/venera-configs@main/manhuaren.js"
+    url = "https://cdn.jsdelivr.net/gh/Venera-Works/venera-configs@main/manhuaren.js"
 
 
     init() {

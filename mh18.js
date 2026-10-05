@@ -8,12 +8,12 @@ class MH18 extends ComicSource {
   // unique id of the source
   key = "mh18"
 
-  version = "1.0.0"
+  version = "1.0.1"
 
   minAppVersion = "1.4.0"
 
   // update url
-  url = "https://cdn.jsdelivr.net/gh/miludeshiji/venera-configs@main/mh18.js"
+  url = "https://cdn.jsdelivr.net/gh/Venera-Works/venera-configs@main/mh18.js"
 
   settings = {
     domains: {

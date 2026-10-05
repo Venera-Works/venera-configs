@@ -3,11 +3,11 @@ class Picacg extends ComicSource {
 
     key = "picacg"
 
-    version = "1.0.6"
+    version = "1.0.7"
 
     minAppVersion = "1.0.0"
 
-    url = "https://cdn.jsdelivr.net/gh/miludeshiji/venera-configs@main/picacg.js"
+    url = "https://cdn.jsdelivr.net/gh/Venera-Works/venera-configs@main/picacg.js"
 
     static defaultApiUrl = "https://picaapi.picacomic.com"
 

@@ -2,9 +2,9 @@
 class Lanraragi extends ComicSource {
     name = "Lanraragi"
     key = "lanraragi"
-    version = "1.2.0"
+    version = "1.2.1"
     minAppVersion = "1.4.0"
-    url = "https://cdn.jsdelivr.net/gh/miludeshiji/venera-configs@main/lanraragi.js"
+    url = "https://cdn.jsdelivr.net/gh/Venera-Works/venera-configs@main/lanraragi.js"
 
     settings = {
         api: { title: "API", type: "input", default: "http://lrr.tvc-16.science" },

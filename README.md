@@ -31,11 +31,21 @@
 ## 安装与首次使用
 
 1. 在 Venera / VeneraNext 中添加本仓库索引，或导入 [`lightnovelshelf.js`](./lightnovelshelf.js)。
-   - 索引地址：`https://cdn.jsdelivr.net/gh/miludeshiji/venera-configs@main/index.json`
-   - 源文件地址：`https://cdn.jsdelivr.net/gh/miludeshiji/venera-configs@main/lightnovelshelf.js`
+   - 索引地址：`https://cdn.jsdelivr.net/gh/Venera-Works/venera-configs@main/index.json`
+   - 源文件地址：`https://cdn.jsdelivr.net/gh/Venera-Works/venera-configs@main/lightnovelshelf.js`
 2. 登录：
    邮箱登录：打开账号登录，输入轻书架注册邮箱和密码。
    Token 登录：在源设置中选择“Token 登录”，输入 `RefreshToken|x-id`；`x-id` 仅去除首尾空白，不会被改写。
+
+## 仓库迁移
+
+本项目已正式迁移至 GitHub 组织仓库：[Venera-Works/venera-configs](https://github.com/Venera-Works/venera-configs)。
+
+- **订阅地址更新**：客户端“漫画源仓库”设置中需要填入 CDN 索引地址（`https://cdn.jsdelivr.net/gh/Venera-Works/venera-configs@main/index.json`），而非 GitHub 网页链接。请将旧仓库订阅地址替换为新地址。
+- **覆盖更新漫画源**：因旧版已安装源内仍记录旧更新 URL，直接在旧源上“检查更新”可能仍请求旧地址。请在更新仓库索引后，从新仓库列表中重新获取并覆盖更新已安装源。
+- **拷贝漫画用户特别提示**：客户端按 `key` 与原 URL 匹配源更新，由于仓库路径变更，共用 `copy_manga` 标识的“拷贝漫画”与“拷贝漫画(多账号)”无法自动区分。使用这两个源的用户请在更新仓库后，在列表中手动选择原本使用的版本进行覆盖更新与重新关联。
+- **数据保留**：无需卸载已有漫画源或清除数据，历史记录、收藏与源设置均不受影响。
+- **兼容性与目录扩充**：所有漫画源名称、Key、文件名及业务逻辑均保持不变；索引目录已补全收录“百合会”（漫画源总数由 35 扩充至 36）。
 
 ## 官方书架（网络收藏）使用说明
 
@@ -62,6 +72,9 @@
 | 手动签到 | 立即发起一次签到 | 按需使用 |
 
 ## 版本变化
+
+### 1.0.2
+- 仓库迁移至 [Venera-Works/venera-configs](https://github.com/Venera-Works/venera-configs)，更新漫画源在线更新地址与仓库索引。
 
 ### 0.5.0
 - 升级对接官方书架 20260921 规范，支持浏览已有多级目录并管理漫画收藏。

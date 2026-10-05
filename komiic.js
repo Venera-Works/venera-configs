@@ -5,12 +5,12 @@ class Komiic extends ComicSource {
   // 唯一标识符
   key = "Komiic";
 
-  version = "1.2.1";
+  version = "1.2.2";
 
   minAppVersion = "1.0.0";
 
   // 更新链接
-  url = "https://cdn.jsdelivr.net/gh/miludeshiji/venera-configs@main/komiic.js";
+  url = "https://cdn.jsdelivr.net/gh/Venera-Works/venera-configs@main/komiic.js";
 
   // 可选访问域名，默认主站
   get baseUrl() {
